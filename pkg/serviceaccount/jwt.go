@@ -224,14 +224,15 @@ func (j *jwtTokenGenerator) GenerateToken(claims *jwt.Claims, privateClaims inte
 // JWTTokenAuthenticator authenticates tokens as JWT tokens produced by JWTTokenGenerator
 // Token signatures are verified using each of the given public keys until one works (allowing key rotation)
 // If lookup is true, the service account and secret referenced as claims inside the token are retrieved and verified with the provided ServiceAccountTokenGetter
+//如果 lookup 为真，则使用提供的 ServiceAccountTokenGetter 检索和验证令牌中作为声明引用的服务帐户和机密
 func JWTTokenAuthenticator(issuers []string, keys []interface{}, implicitAuds authenticator.Audiences, validator Validator) authenticator.Token {
 	issuersMap := make(map[string]bool)
 	for _, issuer := range issuers {
 		issuersMap[issuer] = true
 	}
 	return &jwtTokenAuthenticator{
-		issuers:      issuersMap,
-		keys:         keys,
+		issuers:      issuersMap,  // issuers = "kubernetes/serviceaccount"
+		keys:         keys,  // pubkey
 		implicitAuds: implicitAuds,
 		validator:    validator,
 	}
@@ -259,6 +260,8 @@ type Validator interface {
 	NewPrivateClaims() interface{}
 }
 
+// 内置认证器8：serviceAccount
+// k8s 集群内部 pod 访问 apiserver 的认证机制
 func (j *jwtTokenAuthenticator) AuthenticateToken(ctx context.Context, tokenData string) (*authenticator.Response, bool, error) {
 	if !j.hasCorrectIssuer(tokenData) {
 		return nil, false, nil

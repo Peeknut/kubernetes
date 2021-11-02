@@ -59,6 +59,7 @@ func (admissionHandler chainAdmissionHandler) Validate(ctx context.Context, a At
 	return nil
 }
 
+// 判断是否有一个 admission 插件可以处理传入的 operation
 // Handles will return true if any of the handlers handles the given operation
 func (admissionHandler chainAdmissionHandler) Handles(operation Operation) bool {
 	for _, handler := range admissionHandler {

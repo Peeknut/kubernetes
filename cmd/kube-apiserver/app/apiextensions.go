@@ -101,5 +101,6 @@ func createAPIExtensionsConfig(
 }
 
 func createAPIExtensionsServer(apiextensionsConfig *apiextensionsapiserver.Config, delegateAPIServer genericapiserver.DelegationTarget) (*apiextensionsapiserver.CustomResourceDefinitions, error) {
+	//APIExtensionsServer 的初始化流程，其中最核心方法是 s.GenericAPIServer.InstallAPIGroup，也就是 API 的注册过程，三种 server 中 API 的注册过程都是其核心。
 	return apiextensionsConfig.Complete().New(delegateAPIServer)
 }

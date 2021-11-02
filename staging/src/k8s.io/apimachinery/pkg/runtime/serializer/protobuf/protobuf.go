@@ -244,8 +244,11 @@ func (s *Serializer) Identifier() runtime.Identifier {
 	return serializerIdentifier
 }
 
+
+// RecognizesData()实现了RecognizingDecoder.RecognizesData()接口.
 // RecognizesData implements the RecognizingDecoder interface.
 func (s *Serializer) RecognizesData(data []byte) (bool, bool, error) {
+	// 只要数据是以protobuf协议关键字开始就是protobuf序列化数据，protobuf关键字是[]byte{0x6b, 0x38, 0x73, 0x00}。
 	return bytes.HasPrefix(data, s.prefix), false, nil
 }
 

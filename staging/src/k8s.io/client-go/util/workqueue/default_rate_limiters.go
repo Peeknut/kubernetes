@@ -24,12 +24,16 @@ import (
 	"golang.org/x/time/rate"
 )
 
+// 限速器接口
 type RateLimiter interface {
+	// 获取指定的元素需要等待的时间
 	// When gets an item and gets to decide how long that item should wait
 	When(item interface{}) time.Duration
+	// 释放指定元素，表示该元素已经被处理了
 	// Forget indicates that an item is finished being retried.  Doesn't matter whether its for perm failing
 	// or for success, we'll stop tracking it
 	Forget(item interface{})
+	// 返回某个对象被重新入队多少次，监控用
 	// NumRequeues returns back how many failures the item has had
 	NumRequeues(item interface{}) int
 }

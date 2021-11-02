@@ -29,6 +29,7 @@ type AuthenticatedGroupAdder struct {
 	Authenticator authenticator.Request
 }
 
+//
 // NewAuthenticatedGroupAdder wraps a request authenticator, and adds the system:authenticated group when appropriate.
 // Authentication must succeed, the user must not be system:anonymous, the groups system:authenticated or system:unauthenticated must
 // not be present

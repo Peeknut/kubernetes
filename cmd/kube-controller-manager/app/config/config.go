@@ -26,9 +26,9 @@ import (
 
 // Config is the main context object for the controller manager.
 type Config struct {
-	ComponentConfig kubectrlmgrconfig.KubeControllerManagerConfiguration
+	ComponentConfig kubectrlmgrconfig.KubeControllerManagerConfiguration  // kcm 的配置
 
-	SecureServing *apiserver.SecureServingInfo
+	SecureServing *apiserver.SecureServingInfo  // kcm 的 http server？
 	// LoopbackClientConfig is a config for a privileged loopback connection
 	LoopbackClientConfig *restclient.Config
 

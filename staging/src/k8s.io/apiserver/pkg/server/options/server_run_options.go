@@ -33,7 +33,7 @@ import (
 
 // ServerRunOptions contains the options while running a generic api server.
 type ServerRunOptions struct {
-	AdvertiseAddress net.IP
+	AdvertiseAddress net.IP  // apiserver对外的地址，即 kubeadm init时传入的地址
 
 	CorsAllowedOriginList       []string
 	HSTSDirectives              []string
@@ -96,6 +96,7 @@ func (s *ServerRunOptions) DefaultAdvertiseAddress(secure *SecureServingOptions)
 		return nil
 	}
 
+	// 如果没有传入参数 AdvertiseAddress，那么就使用默认的 hostIP "0.0.0.0"
 	if s.AdvertiseAddress == nil || s.AdvertiseAddress.IsUnspecified() {
 		hostIP, err := secure.DefaultExternalAddress()
 		if err != nil {

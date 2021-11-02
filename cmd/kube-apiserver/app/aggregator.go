@@ -123,12 +123,18 @@ func createAggregatorConfig(
 	return aggregatorConfig, nil
 }
 
+//AggregatorServer 主要用于自定义的聚合控制器的，使 CRD 能够自动注册到集群中。
+// delegateAPIServer 传入的就是 apiserver
 func createAggregatorServer(aggregatorConfig *aggregatorapiserver.Config, delegateAPIServer genericapiserver.DelegationTarget, apiExtensionInformers apiextensionsinformers.SharedInformerFactory) (*aggregatorapiserver.APIAggregator, error) {
+	// 1、初始化 aggregatorServer
 	aggregatorServer, err := aggregatorConfig.Complete().NewWithDelegate(delegateAPIServer)
 	if err != nil {
 		return nil, err
 	}
 
+	// 2、初始化 auto-registration controller
+	// 初始化 crdRegistrationController 和 autoRegistrationController，crdRegistrationController 负责注册 CRD，
+	// autoRegistrationController 负责将 CRD 对应的 APIServices 自动注册到 apiserver 中，CRD 创建后可通过 $ kubectl get apiservices 查看是否注册到 apiservices 中；
 	// create controllers for auto-registration
 	apiRegistrationClient, err := apiregistrationclient.NewForConfig(aggregatorConfig.GenericConfig.LoopbackClientConfig)
 	if err != nil {
@@ -140,6 +146,7 @@ func createAggregatorServer(aggregatorConfig *aggregatorapiserver.Config, delega
 		apiExtensionInformers.Apiextensions().V1().CustomResourceDefinitions(),
 		autoRegistrationController)
 
+	// 3、将 autoRegistrationController 和 crdRegistrationController 加入到 PostStartHook 中；
 	err = aggregatorServer.GenericAPIServer.AddPostStartHook("kube-apiserver-autoregistration", func(context genericapiserver.PostStartHookContext) error {
 		go crdRegistrationController.Run(5, context.StopCh)
 		go func() {

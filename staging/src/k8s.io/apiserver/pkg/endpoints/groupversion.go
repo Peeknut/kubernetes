@@ -115,8 +115,8 @@ func (g *APIGroupVersion) InstallREST(container *restful.Container) ([]*storagev
 
 	apiResources, resourceInfos, ws, registrationErrors := installer.Install()
 	versionDiscoveryHandler := discovery.NewAPIVersionHandler(g.Serializer, g.GroupVersion, staticLister{apiResources})
-	versionDiscoveryHandler.AddToWebService(ws)
-	container.Add(ws)
+	versionDiscoveryHandler.AddToWebService(ws)  // 修改的是 ws
+	container.Add(ws)  // 修改的是 container
 	return removeNonPersistedResources(resourceInfos), utilerrors.NewAggregate(registrationErrors)
 }
 

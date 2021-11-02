@@ -129,6 +129,9 @@ func NewDynamic(verifyOptionsFn VerifyOptionFunc, user UserConversion) *Authenti
 	return &Authenticator{verifyOptionsFn, user}
 }
 
+// 内置认证器1： clientCA认证，客户端证书认证
+// 可以通过 --client-ca-file=SOMEFILE参数启用。这里设置的文件必须包括一个或者多个
+//证书机构，用来验证向 API 服务器提供的客户端证书。
 // AuthenticateRequest authenticates the request using presented client certificates
 func (a *Authenticator) AuthenticateRequest(req *http.Request) (*authenticator.Response, bool, error) {
 	if req.TLS == nil || len(req.TLS.PeerCertificates) == 0 {
@@ -148,6 +151,7 @@ func (a *Authenticator) AuthenticateRequest(req *http.Request) (*authenticator.R
 		}
 	}
 
+	//通过req.TLS.PeerCertificates[0].Verify验证证书，如果是CA签名过的证书，都可以通过验证，认证失败会返回false，而认证成功会返回true。
 	remaining := req.TLS.PeerCertificates[0].NotAfter.Sub(time.Now())
 	clientCertificateExpirationHistogram.WithContext(req.Context()).Observe(remaining.Seconds())
 	chains, err := req.TLS.PeerCertificates[0].Verify(optsCopy)

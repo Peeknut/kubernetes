@@ -16,6 +16,7 @@ limitations under the License.
 
 package schema
 
+//ObjectKind是接口，两个接口函数是GroupVersionKind类型的setter和getter
 // All objects that are serialized from a Scheme encode their type information. This interface is used
 // by serialization to set type information from the Scheme onto the serialized version of an object.
 // For objects that cannot be serialized or have unique requirements, this interface may be a no-op.

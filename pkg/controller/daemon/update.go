@@ -231,17 +231,23 @@ func findUpdatedPodsOnNode(ds *apps.DaemonSet, podsOnNode []*v1.Pod, hash string
 	return newPod, oldPod, true
 }
 
+// constructHistory 获取 ds 所有的 controllerRevision，并且更新现在的版本号，或者创建一个新的版本。
+// 它还重新数据删除当前历史，并将缺少唯一标签添加到现有历史。
 // constructHistory finds all histories controlled by the given DaemonSet, and
 // update current history revision number, or create current history if need to.
 // It also deduplicates current history, and adds missing unique labels to existing histories.
 func (dsc *DaemonSetsController) constructHistory(ds *apps.DaemonSet) (cur *apps.ControllerRevision, old []*apps.ControllerRevision, err error) {
 	var histories []*apps.ControllerRevision
 	var currentHistories []*apps.ControllerRevision
+	// 1. 返回属于 ds 的 cr（匹配 cr label & ds selector）
 	histories, err = dsc.controlledHistories(ds)
 	if err != nil {
 		return nil, nil, err
 	}
+	// 2. 寻找当前 ds 使用的 cr
 	for _, history := range histories {
+		// cr 资源如果没有唯一的label，需要添加label controller-revision-hash。
+		// 将cr name 作为 label 的值，而不是计算 hash 值，所以不用担心会出现哈希冲突
 		// Add the unique label if it's not already added to the history
 		// We use history name instead of computing hash, so that we don't need to worry about hash collision
 		if _, ok := history.Labels[apps.DefaultDaemonSetUniqueLabelKey]; !ok {
@@ -265,6 +271,7 @@ func (dsc *DaemonSetsController) constructHistory(ds *apps.DaemonSet) (cur *apps
 		}
 	}
 
+	// 3，获取最新的 cr（保证只有一个），返回之前的版本
 	currRevision := maxRevision(old) + 1
 	switch len(currentHistories) {
 	case 0:
@@ -343,10 +350,12 @@ func maxRevision(histories []*apps.ControllerRevision) int64 {
 	return max
 }
 
+// 去重
 func (dsc *DaemonSetsController) dedupCurHistories(ds *apps.DaemonSet, curHistories []*apps.ControllerRevision) (*apps.ControllerRevision, error) {
 	if len(curHistories) == 1 {
 		return curHistories[0], nil
 	}
+	// 1，获得 revision 最大的版本
 	var maxRevision int64
 	var keepCur *apps.ControllerRevision
 	for _, cur := range curHistories {
@@ -355,6 +364,8 @@ func (dsc *DaemonSetsController) dedupCurHistories(ds *apps.DaemonSet, curHistor
 			maxRevision = cur.Revision
 		}
 	}
+	// 2，ds 相关的 pod 的label controller-revision-hash修改为最大revision的 cr name
+	// 并且删除重复的 cr
 	// Clean up duplicates and relabel pods
 	for _, cur := range curHistories {
 		if cur.Name == keepCur.Name {
@@ -387,6 +398,8 @@ func (dsc *DaemonSetsController) dedupCurHistories(ds *apps.DaemonSet, curHistor
 	return keepCur, nil
 }
 
+// controlledHistories 根据传入参数 ds，创建其 controllerRevisionControllerRefManager（暂时的对象），然后遍历集群中所有的 cr 资源，
+// 通过 controllerRevisionControllerRefManager 对 cr 资源的 owner references 进行设置，最终返回所有属于 ds 的 cr 资源（cr 的label与ds的selector匹配）
 // controlledHistories returns all ControllerRevisions controlled by the given DaemonSet.
 // This also reconciles ControllerRef by adopting/orphaning.
 // Note that returned histories are pointers to objects in the cache.
@@ -397,6 +410,7 @@ func (dsc *DaemonSetsController) controlledHistories(ds *apps.DaemonSet) ([]*app
 		return nil, err
 	}
 
+	// Q：获取所有的 controllerrevision？
 	// List all histories to include those that don't match the selector anymore
 	// but have a ControllerRef pointing to the controller.
 	histories, err := dsc.historyLister.List(labels.Everything())
@@ -406,7 +420,7 @@ func (dsc *DaemonSetsController) controlledHistories(ds *apps.DaemonSet) ([]*app
 	// If any adoptions are attempted, we should first recheck for deletion with
 	// an uncached quorum read sometime after listing Pods (see #42639).
 	canAdoptFunc := controller.RecheckDeletionTimestamp(func() (metav1.Object, error) {
-		fresh, err := dsc.kubeClient.AppsV1().DaemonSets(ds.Namespace).Get(context.TODO(), ds.Name, metav1.GetOptions{})
+		fresh, err := dsc.kubeClient.AppsV1().DaemonSets(ds.Namespace).Get(context.TODO(), ds.Name, metav1.GetOptions{})  // 获取最新的ds
 		if err != nil {
 			return nil, err
 		}
@@ -420,6 +434,7 @@ func (dsc *DaemonSetsController) controlledHistories(ds *apps.DaemonSet) ([]*app
 	return cm.ClaimControllerRevisions(histories)
 }
 
+// Match 检查 ds 是否与某个 cr 相匹配
 // Match check if the given DaemonSet's template matches the template stored in the given history.
 func Match(ds *apps.DaemonSet, history *apps.ControllerRevision) (bool, error) {
 	patch, err := getPatch(ds)
@@ -429,6 +444,7 @@ func Match(ds *apps.DaemonSet, history *apps.ControllerRevision) (bool, error) {
 	return bytes.Equal(patch, history.Data.Raw), nil
 }
 
+// getPatch 提取出 ds 的 spec.Template 字段，并在其中添加了 "$patch" = "replace"
 // getPatch returns a strategic merge patch that can be applied to restore a Daemonset to a
 // previous version. If the returned error is nil the patch is valid. The current state that we save is just the
 // PodSpecTemplate. We can modify this later to encompass more state (or less) and remain compatible with previously
@@ -446,6 +462,7 @@ func getPatch(ds *apps.DaemonSet) ([]byte, error) {
 	objCopy := make(map[string]interface{})
 	specCopy := make(map[string]interface{})
 
+	// 提取出 ds 的 spec.Template 字段，并在其中添加了 "$patch" = "replace"
 	// Create a patch of the DaemonSet that replaces spec.template
 	spec := raw["spec"].(map[string]interface{})
 	template := spec["template"].(map[string]interface{})
@@ -456,6 +473,7 @@ func getPatch(ds *apps.DaemonSet) ([]byte, error) {
 	return patch, err
 }
 
+// 根据 ds 生成 cr（作为最新 revision）
 func (dsc *DaemonSetsController) snapshot(ds *apps.DaemonSet, revision int64) (*apps.ControllerRevision, error) {
 	patch, err := getPatch(ds)
 	if err != nil {
@@ -476,7 +494,8 @@ func (dsc *DaemonSetsController) snapshot(ds *apps.DaemonSet, revision int64) (*
 	}
 
 	history, err = dsc.kubeClient.AppsV1().ControllerRevisions(ds.Namespace).Create(context.TODO(), history, metav1.CreateOptions{})
-	if outerErr := err; errors.IsAlreadyExists(outerErr) {
+	if outerErr := err; errors.IsAlreadyExists(outerErr) {  // 具有同名的 cr
+		// 1，判断 ds 是否与 cr 匹配
 		// TODO: Is it okay to get from historyLister?
 		existedHistory, getErr := dsc.kubeClient.AppsV1().ControllerRevisions(ds.Namespace).Get(context.TODO(), name, metav1.GetOptions{})
 		if getErr != nil {
@@ -491,6 +510,7 @@ func (dsc *DaemonSetsController) snapshot(ds *apps.DaemonSet, revision int64) (*
 			return existedHistory, nil
 		}
 
+		// 2，ds 与 cr 不匹配，则说明取名冲突
 		// Handle name collisions between different history
 		// Get the latest DaemonSet from the API server to make sure collision count is only increased when necessary
 		currDS, getErr := dsc.kubeClient.AppsV1().DaemonSets(ds.Namespace).Get(context.TODO(), ds.Name, metav1.GetOptions{})

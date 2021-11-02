@@ -50,11 +50,16 @@ type AdmissionOptions struct {
 //  that can be used by servers that don't care about admission chain.
 //  Servers that do care can overwrite/append that field after creation.
 func NewAdmissionOptions() *AdmissionOptions {
+	// 1. 创建AdmissionOptions，并在里面注册了webhook的validating、mutating插件，还有 lifecycle 插件——具体的插件没有具体实现
 	options := genericoptions.NewAdmissionOptions()
+	//2. 注册所有的内置的admission plugins——指的是注册 pulgins 的生成方法
+	// 注册内置所有的 admission 插件（如果自己新增了插件，需要在这里添加注册函数）
 	// register all admission plugins
 	RegisterAllAdmissionPlugins(options.Plugins)
+	//3.设置 admission plugin顺序
 	// set RecommendedPluginOrder
 	options.RecommendedPluginOrder = AllOrderedPlugins
+	//4.默认关闭的plugin列表
 	// set DefaultOffPlugins
 	options.DefaultOffPlugins = DefaultOffAdmissionPlugins()
 
@@ -102,6 +107,7 @@ func (a *AdmissionOptions) Validate() []error {
 	return errs
 }
 
+// 将 options 中 admission 的设置配置到 config 中
 // ApplyTo adds the admission chain to the server configuration.
 // Kube-apiserver just call generic AdmissionOptions.ApplyTo.
 func (a *AdmissionOptions) ApplyTo(
@@ -115,11 +121,13 @@ func (a *AdmissionOptions) ApplyTo(
 		return nil
 	}
 
+	// 默认情况下为nil
 	if a.PluginNames != nil {
 		// pass PluginNames to generic AdmissionOptions
 		a.GenericAdmission.EnablePlugins, a.GenericAdmission.DisablePlugins = computePluginNames(a.PluginNames, a.GenericAdmission.RecommendedPluginOrder)
 	}
 
+	// 将 c.AdmissionControl 初始化：admission 插件的生成
 	return a.GenericAdmission.ApplyTo(c, informers, kubeAPIServerClientConfig, features, pluginInitializers...)
 }
 

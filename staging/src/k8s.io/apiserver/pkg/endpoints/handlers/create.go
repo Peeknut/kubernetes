@@ -48,6 +48,12 @@ import (
 
 var namespaceGVK = schema.GroupVersionKind{Group: "", Version: "v1", Kind: "Namespace"}
 
+//createHandler 是将数据写入到后端存储的方法，对于资源的操作都有相关的权限控制，
+//在 createHandler 中首先会执行 decoder 和 admission 操作，
+//然后调用 create 方法完成 resource 的创建，在 create 方法中会进行 validate 以及最终将数据保存到后端存储中。a
+//dmit 操作即执行 kube-apiserver 中的 admission-plugins，admission-plugins 在 CreateKubeAPIServerConfig 中被初始化为了 admissionChain，
+//其初始化的调用链为 CreateKubeAPIServerConfig --> buildGenericConfig --> s.Admission.ApplyTo --> a.GenericAdmission.ApplyTo --> a.Plugins.NewFromPlugins，
+//最终在 a.Plugins.NewFromPlugins 中将所有已启用的 plugins 封装为 admissionChain，此处要执行的 admit 操作即执行 admission-plugins 中的 admit 操作。
 func createHandler(r rest.NamedCreater, scope *RequestScope, admit admission.Interface, includeName bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, req *http.Request) {
 		// For performance tracking purposes.
@@ -85,6 +91,7 @@ func createHandler(r rest.NamedCreater, scope *RequestScope, admit admission.Int
 			return
 		}
 
+		// 1、得到合适的SerializerInfo
 		gv := scope.Kind.GroupVersion()
 		s, err := negotiation.NegotiateInputSerializer(req, false, scope.Serializer)
 		if err != nil {
@@ -92,6 +99,7 @@ func createHandler(r rest.NamedCreater, scope *RequestScope, admit admission.Int
 			return
 		}
 
+		// 2、找到合适的 decoder
 		decoder := scope.Serializer.DecoderToVersion(s.Serializer, scope.HubGroupVersion)
 
 		body, err := limitedReadBody(req, scope.MaxRequestBodyBytes)
@@ -117,6 +125,7 @@ func createHandler(r rest.NamedCreater, scope *RequestScope, admit admission.Int
 		defaultGVK := scope.Kind
 		original := r.New()
 		trace.Step("About to convert to expected version")
+		// 3、decoder 解码
 		obj, gvk, err := decoder.Decode(body, &defaultGVK, original)
 		if err != nil {
 			err = transformDecodeError(scope.Typer, err, original, gvk, body)
@@ -132,6 +141,7 @@ func createHandler(r rest.NamedCreater, scope *RequestScope, admit admission.Int
 		}
 		trace.Step("Conversion done")
 
+		// 从 obj 中获取 name、ns
 		// On create, get name from new object if unset
 		if len(name) == 0 {
 			_, name, _ = scope.Namer.ObjectName(obj)
@@ -148,8 +158,10 @@ func createHandler(r rest.NamedCreater, scope *RequestScope, admit admission.Int
 		userInfo, _ := request.UserFrom(ctx)
 
 		trace.Step("About to store object in database")
+		// 4、执行 admit 操作，即执行 kube-apiserver 启动时加载的 admission-plugins，
 		admissionAttributes := admission.NewAttributesRecord(obj, nil, scope.Kind, namespace, name, scope.Resource, scope.Subresource, admission.Create, options, dryrun.IsDryRun(options.DryRun), userInfo)
 		requestFunc := func() (runtime.Object, error) {
+			// 5、执行 create 操作
 			return r.Create(
 				ctx,
 				name,
@@ -170,6 +182,7 @@ func createHandler(r rest.NamedCreater, scope *RequestScope, admit admission.Int
 				admit = fieldmanager.NewManagedFieldsValidatingAdmissionController(admit)
 			}
 			if mutatingAdmission, ok := admit.(admission.MutationInterface); ok && mutatingAdmission.Handles(admission.Create) {
+				// 调用 admission chain 中插件的各个 Admit 方法
 				if err := mutatingAdmission.Admit(ctx, admissionAttributes, scope); err != nil {
 					return nil, err
 				}
@@ -203,11 +216,19 @@ func createHandler(r rest.NamedCreater, scope *RequestScope, admit admission.Int
 	}
 }
 
+// 返回资源创建的 handler——参数具有name
 // CreateNamedResource returns a function that will handle a resource creation with name.
 func CreateNamedResource(r rest.NamedCreater, scope *RequestScope, admission admission.Interface) http.HandlerFunc {
+	//createHandler 是将数据写入到后端存储的方法，对于资源的操作都有相关的权限控制，
+	//在 createHandler 中首先会执行 decoder 和 admission 操作，
+	//然后调用 create 方法完成 resource 的创建，在 create 方法中会进行 validate 以及最终将数据保存到后端存储中。a
+	//dmit 操作即执行 kube-apiserver 中的 admission-plugins，admission-plugins 在 CreateKubeAPIServerConfig 中被初始化为了 admissionChain，
+	//其初始化的调用链为 CreateKubeAPIServerConfig --> buildGenericConfig --> s.Admission.ApplyTo --> a.GenericAdmission.ApplyTo --> a.Plugins.NewFromPlugins，
+	//最终在 a.Plugins.NewFromPlugins 中将所有已启用的 plugins 封装为 admissionChain，此处要执行的 admit 操作即执行 admission-plugins 中的 admit 操作。
 	return createHandler(r, scope, admission, true)
 }
 
+// 返回资源创建的 handler——参数没有name
 // CreateResource returns a function that will handle a resource creation.
 func CreateResource(r rest.Creater, scope *RequestScope, admission admission.Interface) http.HandlerFunc {
 	return createHandler(&namedCreaterAdapter{r}, scope, admission, false)

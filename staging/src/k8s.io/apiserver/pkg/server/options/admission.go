@@ -87,6 +87,7 @@ func NewAdmissionOptions() *AdmissionOptions {
 		RecommendedPluginOrder: []string{lifecycle.PluginName, mutatingwebhook.PluginName, validatingwebhook.PluginName},
 		DefaultOffPlugins:      sets.NewString(),
 	}
+	// 注册了lifecycle、validatingwebhook、mutatingwebhook
 	server.RegisterAllAdmissionPlugins(options.Plugins)
 	return options
 }
@@ -132,27 +133,33 @@ func (a *AdmissionOptions) ApplyTo(
 		return fmt.Errorf("admission depends on a Kubernetes core API shared informer, it cannot be nil")
 	}
 
+	// 找到所有启用的plugin——[]string
 	pluginNames := a.enabledPluginNames()
 
+	// 获取插件的配置文件
 	pluginsConfigProvider, err := admission.ReadAdmissionConfiguration(pluginNames, a.ConfigFile, configScheme)
 	if err != nil {
 		return fmt.Errorf("failed to read plugin config: %v", err)
 	}
 
+	// 下面这部分代码跟 yurthub 类似
 	clientset, err := kubernetes.NewForConfig(kubeAPIServerClientConfig)
 	if err != nil {
 		return err
 	}
-	genericInitializer := initializer.New(clientset, informers, c.Authorization.Authorizer, features)
-	initializersChain := admission.PluginInitializers{}
+	// admission 插件初始化器，主要存储了clientset, informers, c.Authorization.Authorizer, features 信息
+	genericInitializer := initializer.New(clientset, informers, c.Authorization.Authorizer, features)  // pluginInitializer
+	initializersChain := admission.PluginInitializers{}  // initializersChain： []PluginInitializer
 	pluginInitializers = append(pluginInitializers, genericInitializer)
 	initializersChain = append(initializersChain, pluginInitializers...)
 
+	// 把所有的admission plugin生成admissionChain，实际是个plugin数组
 	admissionChain, err := a.Plugins.NewFromPlugins(pluginNames, pluginsConfigProvider, initializersChain, a.Decorators)
 	if err != nil {
 		return err
 	}
 
+	// 把admissionChain设置给GenericConfig.AdmissionControl
 	c.AdmissionControl = admissionmetrics.WithStepMetrics(admissionChain)
 	return nil
 }

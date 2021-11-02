@@ -73,14 +73,22 @@ func NewCodec(
 }
 
 type codec struct {
+	// 编码器（序列化）
 	encoder   runtime.Encoder
+	// 解码器（反序列化）
 	decoder   runtime.Decoder
+	// 用于资源的正常版本和内部版本之间的相互转换
 	convertor runtime.ObjectConvertor
+	// 用于资源在 decode 操作中正常版本的创建
 	creater   runtime.ObjectCreater
+	// 用来确定资源的类型 gvk
 	typer     runtime.ObjectTyper
+	// 用于资源在 decode 操作中正常版本的默认值创建
 	defaulter runtime.ObjectDefaulter
 
+	// TODO：作用？
 	encodeVersion runtime.GroupVersioner
+	// 反序列化时指定的版本，作为默认版本传入
 	decodeVersion runtime.GroupVersioner
 
 	identifier runtime.Identifier
@@ -120,12 +128,14 @@ func identifier(encodeGV runtime.GroupVersioner, encoder runtime.Encoder) runtim
 	return runtime.Identifier(identifier)
 }
 
+// 尝试反序列为 obj，然后再将其转换为 internal 版本。
 // Decode attempts a decode of the object, then tries to convert it to the internal version. If into is provided and the decoding is
 // successful, the returned runtime.Object will be the value passed as into. Note that this may bypass conversion if you pass an
 // into that matches the serialized version.
 func (c *codec) Decode(data []byte, defaultGVK *schema.GroupVersionKind, into runtime.Object) (runtime.Object, *schema.GroupVersionKind, error) {
 	// If the into object is unstructured and expresses an opinion about its group/version,
 	// create a new instance of the type so we always exercise the conversion path (skips short-circuiting on `into == obj`)
+	// 如果 into 是 unstructured 类型的，并且他的 gv 信息不为空（说明是 crd 资源？），那么创建一个新的 instance
 	decodeInto := into
 	if into != nil {
 		if _, ok := into.(runtime.Unstructured); ok && !into.GetObjectKind().GroupVersionKind().GroupVersion().Empty() {
@@ -133,19 +143,23 @@ func (c *codec) Decode(data []byte, defaultGVK *schema.GroupVersionKind, into ru
 		}
 	}
 
+	// 反序列化为某个gvk的obj（gvk 信息从 data、defaultGVK、decodeInto 中获取）
 	obj, gvk, err := c.decoder.Decode(data, defaultGVK, decodeInto)
 	if err != nil {
 		return nil, gvk, err
 	}
 
+	// TODO：这个是什么意思
 	if d, ok := obj.(runtime.NestedObjectDecoder); ok {
 		if err := d.DecodeNestedObjects(runtime.WithoutVersionDecoder{c.decoder}); err != nil {
 			return nil, gvk, err
 		}
 	}
 
+	// 如果制定了反序列化的obj
 	// if we specify a target, use generic conversion.
 	if into != nil {
+		// 填充默认值
 		// perform defaulting if requested
 		if c.defaulter != nil {
 			c.defaulter.Default(obj)
@@ -156,6 +170,7 @@ func (c *codec) Decode(data []byte, defaultGVK *schema.GroupVersionKind, into ru
 			return into, gvk, nil
 		}
 
+		// 此时 obj 的 gvk 信息于 into 的 gvk 信息不匹配，所以要尝试进行转换
 		if err := c.convertor.Convert(obj, into, c.decodeVersion); err != nil {
 			return nil, gvk, err
 		}
@@ -168,6 +183,7 @@ func (c *codec) Decode(data []byte, defaultGVK *schema.GroupVersionKind, into ru
 		c.defaulter.Default(obj)
 	}
 
+	// 此时，into 值为 nil
 	out, err := c.convertor.ConvertToVersion(obj, c.decodeVersion)
 	if err != nil {
 		return nil, gvk, err
@@ -208,6 +224,7 @@ func (c *codec) doEncode(obj runtime.Object, w io.Writer) error {
 		}
 	}
 
+	// 从 obj 中获取 gvk 信息
 	gvks, isUnversioned, err := c.typer.ObjectKinds(obj)
 	if err != nil {
 		return err

@@ -31,7 +31,8 @@ type pluginInitializer struct {
 	featureGates      featuregate.FeatureGate
 }
 
-// New creates an instance of admission plugins initializer.
+// 创建一个 admission 插件初始化器
+//New creates an instance of admission plugins initializer.
 // This constructor is public with a long param list so that callers immediately know that new information can be expected
 // during compilation when they update a level.
 func New(
@@ -48,6 +49,7 @@ func New(
 	}
 }
 
+// 将 admission 初始化器保存的信息，注册到某个 admission 插件
 // Initialize checks the initialization interfaces implemented by a plugin
 // and provide the appropriate initialization data
 func (i pluginInitializer) Initialize(plugin admission.Interface) {

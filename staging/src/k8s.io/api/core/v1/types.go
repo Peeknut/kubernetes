@@ -3715,6 +3715,10 @@ type PodStatusResult struct {
 // +genclient:method=UpdateEphemeralContainers,verb=update,subresource=ephemeralcontainers
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
+// 上面+k8s:deepcopy-gen:....就是告诉代码生成工具为下面的类型生成runtime.Object接口的
+// DeepCopyObject()函数实现。因为所有的API对象类型都要实现DeepCopyObject()函数，这是一个相当
+// 大量的重复工作，所以kubernetes用代码生成工具来实现。至于如何实现的不作为本文讨论重点，只要读者
+// 知道deep copy的目的就可以了。
 // Pod is a collection of containers that can run on a host. This resource is created
 // by clients and scheduled onto hosts.
 type Pod struct {

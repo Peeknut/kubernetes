@@ -16,18 +16,23 @@ limitations under the License.
 
 package workqueue
 
+// RateLimitingInterface 是对加入队列的元素进行速率限制的接口
 // RateLimitingInterface is an interface that rate limits items being added to the queue.
 type RateLimitingInterface interface {
+	// 延时队列
 	DelayingInterface
 
+	// 在限速器说ok后，将元素item添加到工作队列中
 	// AddRateLimited adds an item to the workqueue after the rate limiter says it's ok
 	AddRateLimited(item interface{})
 
+	// 丢弃指定的元素
 	// Forget indicates that an item is finished being retried.  Doesn't matter whether it's for perm failing
 	// or for success, we'll stop the rate limiter from tracking it.  This only clears the `rateLimiter`, you
 	// still have to call `Done` on the queue.
 	Forget(item interface{})
 
+	// 查询元素放入队列的次数
 	// NumRequeues returns back how many times the item was requeued
 	NumRequeues(item interface{}) int
 }
@@ -50,20 +55,26 @@ func NewNamedRateLimitingQueue(rateLimiter RateLimiter, name string) RateLimitin
 
 // rateLimitingType wraps an Interface and provides rateLimited re-enquing
 type rateLimitingType struct {
+	// 延时队列
 	DelayingInterface
 
+	// 因为是限速队列，所以在里面定义一个限速器
 	rateLimiter RateLimiter
 }
 
+// 通过限速器获取延迟时间，然后加入到延时队列
 // AddRateLimited AddAfter's the item based on the time when the rate limiter says it's ok
 func (q *rateLimitingType) AddRateLimited(item interface{}) {
 	q.DelayingInterface.AddAfter(item, q.rateLimiter.When(item))
 }
 
+// Q：这个函数的作用是什么？
+// 直接通过限速器获取元素放入队列的次数
 func (q *rateLimitingType) NumRequeues(item interface{}) int {
 	return q.rateLimiter.NumRequeues(item)
 }
 
+// 直接通过限速器丢弃指定的元素
 func (q *rateLimitingType) Forget(item interface{}) {
 	q.rateLimiter.Forget(item)
 }

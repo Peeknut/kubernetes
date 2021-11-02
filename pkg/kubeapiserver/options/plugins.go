@@ -104,6 +104,7 @@ var AllOrderedPlugins = []string{
 	deny.PluginName,              // AlwaysDeny
 }
 
+// 注册内置所有的 admission 插件（如果自己新增了插件，需要在这里添加注册函数）
 // RegisterAllAdmissionPlugins registers all admission plugins and
 // sets the recommended plugins order.
 func RegisterAllAdmissionPlugins(plugins *admission.Plugins) {
@@ -141,6 +142,7 @@ func RegisterAllAdmissionPlugins(plugins *admission.Plugins) {
 	certsubjectrestriction.Register(plugins)
 }
 
+// 返回默认关闭的插件
 // DefaultOffAdmissionPlugins get admission plugins off by default for kube-apiserver.
 func DefaultOffAdmissionPlugins() sets.String {
 	defaultOnPlugins := sets.NewString(

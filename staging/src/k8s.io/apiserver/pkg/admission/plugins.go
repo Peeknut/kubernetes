@@ -82,7 +82,7 @@ func (ps *Plugins) Register(name string, plugin Factory) {
 	}
 
 	klog.V(1).InfoS("Registered admission plugin", "plugin", name)
-	ps.registry[name] = plugin
+	ps.registry[name] = plugin  // plugin 是生成某个 plugin 的具体方法，并不是某个 plugin
 }
 
 // getPlugin creates an instance of the named plugin.  It returns `false` if the
@@ -92,7 +92,7 @@ func (ps *Plugins) Register(name string, plugin Factory) {
 func (ps *Plugins) getPlugin(name string, config io.Reader) (Interface, bool, error) {
 	ps.lock.Lock()
 	defer ps.lock.Unlock()
-	f, found := ps.registry[name]
+	f, found := ps.registry[name]  // 是否注册过，即name是否有效
 	if !found {
 		return nil, false, nil
 	}
@@ -123,6 +123,7 @@ func splitStream(config io.Reader) (io.Reader, io.Reader, error) {
 	return bytes.NewBuffer(configBytes), bytes.NewBuffer(configBytes), nil
 }
 
+// 根据 Plugins 中的信息，创建所有已经注册的 plugin
 // NewFromPlugins returns an admission.Interface that will enforce admission control decisions of all
 // the given plugins.
 func (ps *Plugins) NewFromPlugins(pluginNames []string, configProvider ConfigProvider, pluginInitializer PluginInitializer, decorator Decorator) (Interface, error) {
@@ -130,25 +131,30 @@ func (ps *Plugins) NewFromPlugins(pluginNames []string, configProvider ConfigPro
 	mutationPlugins := []string{}
 	validationPlugins := []string{}
 	for _, pluginName := range pluginNames {
-		pluginConfig, err := configProvider.ConfigFor(pluginName)
+		pluginConfig, err := configProvider.ConfigFor(pluginName)  // 根据插件名字获取他的配置
 		if err != nil {
 			return nil, err
 		}
 
+		// 用 pluginInitializer 初始化插件——即将 pluginInitializer 中的信息填到插件中
 		plugin, err := ps.InitPlugin(pluginName, pluginConfig, pluginInitializer)
 		if err != nil {
 			return nil, err
 		}
 		if plugin != nil {
-			if decorator != nil {
+			if decorator != nil {  // 装饰器
 				handlers = append(handlers, decorator.Decorate(plugin, pluginName))
 			} else {
 				handlers = append(handlers, plugin)
 			}
 
+			// 是否实现了 admit 方法
+			// 变更控制器：变更（mutating）控制器可以修改被其接受的对象
 			if _, ok := plugin.(MutationInterface); ok {
 				mutationPlugins = append(mutationPlugins, pluginName)
 			}
+			// 是否实现了 validate 方法
+			// 准入控制器
 			if _, ok := plugin.(ValidationInterface); ok {
 				validationPlugins = append(validationPlugins, pluginName)
 			}
@@ -160,6 +166,7 @@ func (ps *Plugins) NewFromPlugins(pluginNames []string, configProvider ConfigPro
 	if len(validationPlugins) != 0 {
 		klog.Infof("Loaded %d validating admission controller(s) successfully in the following order: %s.", len(validationPlugins), strings.Join(validationPlugins, ","))
 	}
+	// 相当于包装了一下 chainAdmissionHandler(handlers)，本质还是没有怎么变
 	return newReinvocationHandler(chainAdmissionHandler(handlers)), nil
 }
 

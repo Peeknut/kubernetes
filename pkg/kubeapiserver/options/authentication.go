@@ -44,18 +44,22 @@ import (
 	"k8s.io/kubernetes/plugin/pkg/auth/authenticator/token/bootstrap"
 )
 
+// 谁来调用这个函数？
+// apiserver 所有内置认证器所需要的属性
 // BuiltInAuthenticationOptions contains all build-in authentication options for API Server
 type BuiltInAuthenticationOptions struct {
+	// 针对特定认证器的设置
 	APIAudiences    []string
-	Anonymous       *AnonymousAuthenticationOptions
-	BootstrapToken  *BootstrapTokenAuthenticationOptions
-	ClientCert      *genericoptions.ClientCertAuthenticationOptions
-	OIDC            *OIDCAuthenticationOptions
+	Anonymous       *AnonymousAuthenticationOptions  // 匿名请求：启用匿名请求支持之后，如果请求没有被已配置的其他身份认证方法拒绝，则被视作 匿名请求（Anonymous Requests）。这类请求获得用户名 system:anonymous 和 对应的用户组 system:unauthenticated。
+	BootstrapToken  *BootstrapTokenAuthenticationOptions  // 启动引导令牌：  这些令牌以 Secret 的形式保存在 kube-system 名字空间中，可以被动态管理和创建。这些令牌的格式为 [a-z0-9]{6}.[a-z0-9]{16}。第一个部分是令牌的 ID；第二个部分 是令牌的 Secret。你可以用如下所示的方式来在 HTTP 头部设置令牌：
+	ClientCert      *genericoptions.ClientCertAuthenticationOptions  // x509客户证书
+	OIDC            *OIDCAuthenticationOptions  // OpenID Connect（OIDC）令牌
 	RequestHeader   *genericoptions.RequestHeaderAuthenticationOptions
-	ServiceAccounts *ServiceAccountAuthenticationOptions
-	TokenFile       *TokenFileAuthenticationOptions
-	WebHook         *WebHookAuthenticationOptions
+	ServiceAccounts *ServiceAccountAuthenticationOptions  // 服务账号（Service Account）是一种自动被启用的用户认证机制，使用经过签名的 持有者令牌来验证请求。
+	TokenFile       *TokenFileAuthenticationOptions  // 静态令牌文件：令牌文件是一个 CSV 文件，包含至少 3 个列：令牌、用户名和用户的 UID。 其余列被视为可选的组名。
+	WebHook         *WebHookAuthenticationOptions  // Webhook 令牌身份认证
 
+	// 通用设置
 	TokenSuccessCacheTTL time.Duration
 	TokenFailureCacheTTL time.Duration
 }
@@ -85,11 +89,14 @@ type OIDCAuthenticationOptions struct {
 
 // ServiceAccountAuthenticationOptions contains service account authentication options for API Server
 type ServiceAccountAuthenticationOptions struct {
-	KeyFiles         []string
+	// apiserver 启动时，会传入参数：s.Authentication.ServiceAccounts.KeyFiles：--service-account-key-file=/etc/kubernetes/pki/sa.pub
+	// 如果没有定义，那么会使用 --tls-private-key-file 的值： /etc/kubernetes/pki/apiserver.key
+	// 如果 --service-account-signing-key 参数传入了值，那么--service-account-key-file 必须提供
+	KeyFiles         []string  // 存放 apiserver 的 keyfile
 	Lookup           bool
-	Issuers          []string
+	Issuers          []string  // 服务账户令牌签发的发行者
 	JWKSURI          string
-	MaxExpiration    time.Duration
+	MaxExpiration    time.Duration  // 证书过期时间
 	ExtendExpiration bool
 }
 
@@ -118,6 +125,7 @@ func NewBuiltInAuthenticationOptions() *BuiltInAuthenticationOptions {
 	}
 }
 
+// 初始化所有内置认证器的默认配置（在 apiserver 启动流程中会解析实际收到的命令行参数，把真正需要使用的认证器给实例化）
 // WithAll set default value for every build-in authentication option
 func (o *BuiltInAuthenticationOptions) WithAll() *BuiltInAuthenticationOptions {
 	return o.
@@ -243,6 +251,8 @@ func (o *BuiltInAuthenticationOptions) Validate() []error {
 
 // AddFlags returns flags of authentication for a API Server
 func (o *BuiltInAuthenticationOptions) AddFlags(fs *pflag.FlagSet) {
+	//API 的标识符。 服务帐户令牌身份验证器将验证针对 API 使用的令牌是否绑定到这些受众中的至少一个。
+	//如果配置了 -service-account-issuer 标志而未配置此标志，则此字段默认为包含颁发者 URL 的单个元素列表。
 	fs.StringSliceVar(&o.APIAudiences, "api-audiences", o.APIAudiences, ""+
 		"Identifiers of the API. The service account token authenticator will validate that "+
 		"tokens used against the API are bound to at least one of these audiences. If the "+
@@ -263,6 +273,7 @@ func (o *BuiltInAuthenticationOptions) AddFlags(fs *pflag.FlagSet) {
 	}
 
 	if o.ClientCert != nil {
+		//apiserver 启动的时候传入了参数：s.ClientCA：--client-ca-file=/etc/kubernetes/pki/ca.crt
 		o.ClientCert.AddFlags(fs)
 	}
 
@@ -313,6 +324,9 @@ func (o *BuiltInAuthenticationOptions) AddFlags(fs *pflag.FlagSet) {
 	}
 
 	if o.ServiceAccounts != nil {
+		// apiserver 启动时，会传入参数：--service-account-key-file=/etc/kubernetes/pki/sa.pub
+		// 如果没有定义，那么会使用 --tls-private-key-file 的值。
+		// 如果 --service-account-signing-key 参数传入了值，那么--service-account-key-file 必须提供
 		fs.StringArrayVar(&o.ServiceAccounts.KeyFiles, "service-account-key-file", o.ServiceAccounts.KeyFiles, ""+
 			"File containing PEM-encoded x509 RSA or ECDSA private or public keys, used to verify "+
 			"ServiceAccount tokens. The specified file can contain multiple keys, and the flag can "+
@@ -378,6 +392,7 @@ func (o *BuiltInAuthenticationOptions) AddFlags(fs *pflag.FlagSet) {
 	}
 }
 
+// 根据 options 中的内容生成 config
 // ToAuthenticationConfig convert BuiltInAuthenticationOptions to kubeauthenticator.Config
 func (o *BuiltInAuthenticationOptions) ToAuthenticationConfig() (kubeauthenticator.Config, error) {
 	ret := kubeauthenticator.Config{
@@ -395,6 +410,8 @@ func (o *BuiltInAuthenticationOptions) ToAuthenticationConfig() (kubeauthenticat
 
 	if o.ClientCert != nil {
 		var err error
+		// 返回的内容是 ca 证书内容。
+		// 因为启动的时候传入了参数，所以返回的结果是 s.ClientCA：--client-ca-file=/etc/kubernetes/pki/ca.crt 中的内容。
 		ret.ClientCAContentProvider, err = o.ClientCert.GetClientCAContentProvider()
 		if err != nil {
 			return kubeauthenticator.Config{}, err
@@ -454,8 +471,16 @@ func (o *BuiltInAuthenticationOptions) ToAuthenticationConfig() (kubeauthenticat
 	return ret, nil
 }
 
+// 认证初始化
 // ApplyTo requires already applied OpenAPIConfig and EgressSelector if present.
-func (o *BuiltInAuthenticationOptions) ApplyTo(authInfo *genericapiserver.AuthenticationInfo, secureServing *genericapiserver.SecureServingInfo, egressSelector *egressselector.EgressSelector, openAPIConfig *openapicommon.Config, extclient kubernetes.Interface, versionedInformer informers.SharedInformerFactory) error {
+func (o *BuiltInAuthenticationOptions) ApplyTo(
+	authInfo *genericapiserver.AuthenticationInfo,
+	secureServing *genericapiserver.SecureServingInfo,
+	egressSelector *egressselector.EgressSelector,
+	openAPIConfig *openapicommon.Config,
+	extclient kubernetes.Interface,
+	versionedInformer informers.SharedInformerFactory) error {
+
 	if o == nil {
 		return nil
 	}
@@ -464,12 +489,13 @@ func (o *BuiltInAuthenticationOptions) ApplyTo(authInfo *genericapiserver.Authen
 		return errors.New("uninitialized OpenAPIConfig")
 	}
 
-	authenticatorConfig, err := o.ToAuthenticationConfig()
+	authenticatorConfig, err := o.ToAuthenticationConfig()  // 根据 option 生成 config
 	if err != nil {
 		return err
 	}
 
 	if authenticatorConfig.ClientCAContentProvider != nil {
+		// 填充 secureServing 的 ClientCA 字段
 		if err = authInfo.ApplyClientCert(authenticatorConfig.ClientCAContentProvider, secureServing); err != nil {
 			return fmt.Errorf("unable to load client CA file: %v", err)
 		}
@@ -504,6 +530,7 @@ func (o *BuiltInAuthenticationOptions) ApplyTo(authInfo *genericapiserver.Authen
 		authenticatorConfig.CustomDial = egressDialer
 	}
 
+	// 创建认证器
 	authInfo.Authenticator, openAPIConfig.SecurityDefinitions, err = authenticatorConfig.New()
 	if err != nil {
 		return err

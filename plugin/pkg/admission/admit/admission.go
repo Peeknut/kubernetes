@@ -40,6 +40,7 @@ type alwaysAdmit struct{}
 var _ admission.MutationInterface = alwaysAdmit{}
 var _ admission.ValidationInterface = alwaysAdmit{}
 
+// 根据请求属性
 // Admit makes an admission decision based on the request attributes
 func (alwaysAdmit) Admit(ctx context.Context, a admission.Attributes, o admission.ObjectInterfaces) (err error) {
 	return nil

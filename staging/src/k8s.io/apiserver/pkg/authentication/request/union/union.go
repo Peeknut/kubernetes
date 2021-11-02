@@ -23,6 +23,7 @@ import (
 	"k8s.io/apiserver/pkg/authentication/authenticator"
 )
 
+// apiserver 使用 unionAuthRequestHandler 对权限进行校验，该类可以看作是一个权限认证器的装饰类
 // unionAuthRequestHandler authenticates requests using a chain of authenticator.Requests
 type unionAuthRequestHandler struct {
 	// Handlers is a chain of request authenticators to delegate to
@@ -49,6 +50,8 @@ func NewFailOnError(authRequestHandlers ...authenticator.Request) authenticator.
 	return &unionAuthRequestHandler{Handlers: authRequestHandlers, FailOnError: true}
 }
 
+// 什么时候、谁来调用
+// 对请求认证的过程中，遍历已启用的认证器列表，并执行每个认证器
 // AuthenticateRequest authenticates the request using a chain of authenticator.Request objects.
 func (authHandler *unionAuthRequestHandler) AuthenticateRequest(req *http.Request) (*authenticator.Response, bool, error) {
 	var errlist []error

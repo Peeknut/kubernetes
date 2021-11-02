@@ -27,6 +27,7 @@ var (
 	bootstrapTokenRe = regexp.MustCompile(api.BootstrapTokenPattern)
 )
 
+// 拆分为两部分：token ID & secret ID
 // ParseToken tries and parse a valid token from a string.
 // A token ID and token secret are returned in case of success, an error otherwise.
 func ParseToken(s string) (tokenID, tokenSecret string, err error) {

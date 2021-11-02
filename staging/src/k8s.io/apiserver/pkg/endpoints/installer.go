@@ -95,6 +95,7 @@ var toDiscoveryKubeVerb = map[string]string{
 	"WATCHLIST":        "watch",
 }
 
+// API资源添加 handlers
 // Install handlers for API resources.
 func (a *APIInstaller) Install() ([]metav1.APIResource, []*storageversion.ResourceInfo, *restful.WebService, []error) {
 	var apiResources []metav1.APIResource
@@ -188,6 +189,8 @@ func GetResourceKind(groupVersion schema.GroupVersion, storage rest.Storage, typ
 	return fqKindToRegister, nil
 }
 
+//该方法实现了 rest.Storage 到 restful.Route 的转换，其首先会判断 API Resource 所支持的 REST 接口，然后为 REST 接口添加对应的 handler，最后将其注册到路由中。
+// 注册资源 handler，包括 CRUD 操作
 func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storage, ws *restful.WebService) (*metav1.APIResource, *storageversion.ResourceInfo, error) {
 	admit := a.group.Admit
 
@@ -237,6 +240,7 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 		namespaceScoped = scoper.NamespaceScoped()
 	}
 
+	// 1、判断该 resource 实现了哪些 REST 操作接口，以此来判断其支持的 verbs 以便为其添加路由
 	// what verbs are supported by the storage, used to know what verbs we support per path
 	creater, isCreater := storage.(rest.Creater)
 	namedCreater, isNamedCreater := storage.(rest.NamedCreater)
@@ -408,6 +412,7 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 		apiResource.StorageVersionHash = discovery.StorageVersionHash(gvk.Group, gvk.Version, gvk.Kind)
 	}
 
+	// 2、为 resource 添加对应的 actions 并根据是否支持 namespace
 	// Get the list of actions for the given scope.
 	switch {
 	case !namespaceScoped:
@@ -567,7 +572,10 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 	allMediaTypes := append(mediaTypes, streamMediaTypes...)
 	ws.Produces(allMediaTypes...)
 
+
+	// 3、根据 action 创建对应的 route
 	kubeVerbs := map[string]struct{}{}
+	// 请求的一般信息
 	reqScope := handlers.RequestScope{
 		Serializer:      a.group.Serializer,
 		ParameterCodec:  a.group.ParameterCodec,
@@ -614,6 +622,8 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 			return nil, nil, fmt.Errorf("failed to create field manager: %v", err)
 		}
 	}
+	// 4、从 rest.Storage 到 restful.Route 映射
+	// 为每个操作添加对应的 handler
 	for _, action := range actions {
 		producedObject := storageMeta.ProducesObject(action.Verb)
 		if producedObject == nil {
@@ -695,6 +705,7 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 			}
 
 			if needOverride {
+				// 包裹了 type RouteFunction func(*Request, *Response) ,主要关心 routeFunc(request,response),也就是传入的 restfulXXXXXResource
 				// need change the reported verb
 				handler = metrics.InstrumentRouteFunc(verbOverrider.OverrideMetricsVerb(action.Verb), group, version, resource, subresource, requestScope, metrics.APIServerComponent, deprecated, removedRelease, handler)
 			} else {
@@ -809,6 +820,7 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 			routes = append(routes, route)
 		case "POST": // Create a resource.
 			var handler restful.RouteFunction
+			// 5、初始化 handler
 			if isNamedCreater {
 				handler = restfulCreateNamedResource(namedCreater, reqScope, admit)
 			} else {
@@ -821,6 +833,7 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 			if isSubresource {
 				doc = "create " + subresource + " of" + article + kind
 			}
+			// 6、route 与 handler 进行绑定
 			route := ws.POST(action.Path).To(handler).
 				Doc(doc).
 				Param(ws.QueryParameter("pretty", "If 'true', then the output is pretty printed.")).
@@ -837,6 +850,7 @@ func (a *APIInstaller) registerResourceHandlers(path string, storage rest.Storag
 				return nil, nil, err
 			}
 			addParams(route, action.Params)
+			// 7、添加到路由中
 			routes = append(routes, route)
 		case "DELETE": // Delete a resource.
 			article := GetArticleForNoun(kind, " ")
@@ -1175,6 +1189,7 @@ func restfulListResource(r rest.Lister, rw rest.Watcher, scope handlers.RequestS
 	}
 }
 
+//是 POST 操作对应的 handler，最终会调用 createHandler 方法完成。
 func restfulCreateNamedResource(r rest.NamedCreater, scope handlers.RequestScope, admit admission.Interface) restful.RouteFunction {
 	return func(req *restful.Request, res *restful.Response) {
 		handlers.CreateNamedResource(r, &scope, admit)(res.ResponseWriter, req.Request)

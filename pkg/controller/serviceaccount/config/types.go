@@ -20,7 +20,7 @@ package config
 type SAControllerConfiguration struct {
 	// serviceAccountKeyFile is the filename containing a PEM-encoded private RSA key
 	// used to sign service account tokens.
-	ServiceAccountKeyFile string
+	ServiceAccountKeyFile string  // 私钥用于签发 token
 	// concurrentSATokenSyncs is the number of service account token syncing operations
 	// that will be done concurrently.
 	ConcurrentSATokenSyncs int32

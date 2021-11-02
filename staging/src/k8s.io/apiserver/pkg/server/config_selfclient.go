@@ -33,7 +33,7 @@ func (s *SecureServingInfo) NewClientConfig(caCert []byte) (*restclient.Config, 
 		return nil, nil
 	}
 
-	host, port, err := LoopbackHostPort(s.Listener.Addr().String())
+	host, port, err := LoopbackHostPort(s.Listener.Addr().String())  // sidecar 那边使用的话，应该传入的是 apiserver 的监听地址
 	if err != nil {
 		return nil, err
 	}
@@ -43,13 +43,13 @@ func (s *SecureServingInfo) NewClientConfig(caCert []byte) (*restclient.Config, 
 		QPS:  -1,
 		Host: "https://" + net.JoinHostPort(host, port),
 		TLSClientConfig: restclient.TLSClientConfig{
-			CAData: caCert,
+			CAData: caCert,  // 这里包含了自签的 server.crt + ca.crt。
 		},
 	}, nil
 }
 
 func (s *SecureServingInfo) NewLoopbackClientConfig(token string, loopbackCert []byte) (*restclient.Config, error) {
-	c, err := s.NewClientConfig(loopbackCert)
+	c, err := s.NewClientConfig(loopbackCert)  // ca 内容
 	if err != nil || c == nil {
 		return c, err
 	}

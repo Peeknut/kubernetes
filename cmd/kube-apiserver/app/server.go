@@ -65,6 +65,7 @@ import (
 	"k8s.io/kubernetes/cmd/kube-apiserver/app/options"
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	"k8s.io/kubernetes/pkg/capabilities"
+	// 注册所有的资源
 	"k8s.io/kubernetes/pkg/controlplane"
 	"k8s.io/kubernetes/pkg/controlplane/reconcilers"
 	generatedopenapi "k8s.io/kubernetes/pkg/generated/openapi"
@@ -117,17 +118,20 @@ cluster's shared state through which all other components interact.`,
 			if err != nil {
 				return err
 			}
+			//设置默认值
 			// set default options
 			completedOptions, err := Complete(s)
 			if err != nil {
 				return err
 			}
 
+			// 针对各类参数分别调用其 validate 函数进行检查：认证的参数、授权的参数
 			// validate options
 			if errs := completedOptions.Validate(); len(errs) != 0 {
 				return utilerrors.NewAggregate(errs)
 			}
 
+			// 传入 s
 			return Run(completedOptions, genericapiserver.SetupSignalHandler())
 		},
 		Args: func(cmd *cobra.Command, args []string) error {
@@ -140,11 +144,12 @@ cluster's shared state through which all other components interact.`,
 		},
 	}
 
+	// 添加参数
 	fs := cmd.Flags()
-	namedFlagSets := s.Flags()
-	verflag.AddFlags(namedFlagSets.FlagSet("global"))
-	globalflag.AddGlobalFlags(namedFlagSets.FlagSet("global"), cmd.Name())
-	options.AddCustomGlobalFlags(namedFlagSets.FlagSet("generic"))
+	namedFlagSets := s.Flags()  // apiserver 添加各个部分的参数
+	verflag.AddFlags(namedFlagSets.FlagSet("global"))  // AddFlags 在任意 FlagSet 上注册此包的标志，以便它们指向与全局标志相同的值。
+	globalflag.AddGlobalFlags(namedFlagSets.FlagSet("global"), cmd.Name())  // AddGlobalFlags 显式注册库（klog、verflag 等）针对来自“flag”和“k8s.io/klog/v2”的全局标志集注册的标志。 我们这样做是为了防止不需要的标志泄漏到组件的标志集中。
+	options.AddCustomGlobalFlags(namedFlagSets.FlagSet("generic"))  // // AddCustomGlobalFlags 显式注册内部包针对来自“flag”的全局标志集注册的标志。 我们这样做是为了防止不需要的标志泄漏到 kube-apiserver 的标志集中。
 	for _, f := range namedFlagSets.FlagSets {
 		fs.AddFlagSet(f)
 	}
@@ -160,47 +165,62 @@ func Run(completeOptions completedServerRunOptions, stopCh <-chan struct{}) erro
 	// To help debugging, immediately log version
 	klog.Infof("Version: %+v", version.Get())
 
+	// 创建服务链，即初始化 server
+	// 构建服务调用链，并判断是否启动非安全的 http server，http server 链中包含 apiserver 要启动的3个 server，以及为每个 server 注册对应的资源。
+	// server 的初始化使用委托模式，通过 DelegationTarget 接口，把基本的 API Server、CustomResource、Aggregator 这三种服务采用链式结构串联起来，对外提供服务。
 	server, err := CreateServerChain(completeOptions, stopCh)
 	if err != nil {
 		return err
 	}
 
+	// 预运行
+	// 进行服务运行前的准备，该方法主要完成了健康检查、存活检查和OpenAPI路由的注册工作；
 	prepared, err := server.PrepareRun()
 	if err != nil {
 		return err
 	}
 
+	// 正式运行
+	// 启动 https server
 	return prepared.Run(stopCh)
 }
 
+// 创建服务链
 // CreateServerChain creates the apiservers connected via delegation.
 func CreateServerChain(completedOptions completedServerRunOptions, stopCh <-chan struct{}) (*aggregatorapiserver.APIAggregator, error) {
+	// 1）创建 kubeapi-server 配置
 	kubeAPIServerConfig, serviceResolver, pluginInitializer, err := CreateKubeAPIServerConfig(completedOptions)
 	if err != nil {
 		return nil, err
 	}
 
+	// 创建 kubeapi-extension-server 配置
+	// 2）判断是否配置了 APIExtensionsServer，创建 apiExtensionsConfig
 	// If additional API servers are added, they should be gated.
 	apiExtensionsConfig, err := createAPIExtensionsConfig(*kubeAPIServerConfig.GenericConfig, kubeAPIServerConfig.ExtraConfig.VersionedInformers, pluginInitializer, completedOptions.ServerRunOptions, completedOptions.MasterCount,
 		serviceResolver, webhook.NewDefaultAuthenticationInfoResolverWrapper(kubeAPIServerConfig.ExtraConfig.ProxyTransport, kubeAPIServerConfig.GenericConfig.EgressSelector, kubeAPIServerConfig.GenericConfig.LoopbackClientConfig, kubeAPIServerConfig.GenericConfig.TracerProvider))
 	if err != nil {
 		return nil, err
 	}
+	// 3）创建 kubeapi-extension-server 服务
 	apiExtensionsServer, err := createAPIExtensionsServer(apiExtensionsConfig, genericapiserver.NewEmptyDelegate())
 	if err != nil {
 		return nil, err
 	}
 
+	// 4）创建 kubeapi-server 服务
 	kubeAPIServer, err := CreateKubeAPIServer(kubeAPIServerConfig, apiExtensionsServer.GenericAPIServer)
 	if err != nil {
 		return nil, err
 	}
 
+	// 5）创建 aggregator-server 配置
 	// aggregator comes last in the chain
 	aggregatorConfig, err := createAggregatorConfig(*kubeAPIServerConfig.GenericConfig, completedOptions.ServerRunOptions, kubeAPIServerConfig.ExtraConfig.VersionedInformers, serviceResolver, kubeAPIServerConfig.ExtraConfig.ProxyTransport, pluginInitializer)
 	if err != nil {
 		return nil, err
 	}
+	// 6）创建 aggregator-server 服务
 	aggregatorServer, err := createAggregatorServer(aggregatorConfig, kubeAPIServer.GenericAPIServer, apiExtensionsServer.Informers)
 	if err != nil {
 		// we don't need special handling for innerStopCh because the aggregator server doesn't create any go routines
@@ -232,6 +252,7 @@ func CreateProxyTransport() *http.Transport {
 	return proxyTransport
 }
 
+// 创建 kube-api-server 的配置文件
 // CreateKubeAPIServerConfig creates all the resources for running the API server, but runs none of them
 func CreateKubeAPIServerConfig(s completedServerRunOptions) (
 	*controlplane.Config,
@@ -241,11 +262,13 @@ func CreateKubeAPIServerConfig(s completedServerRunOptions) (
 ) {
 	proxyTransport := CreateProxyTransport()
 
+	// 1）构建通用配置
 	genericConfig, versionedInformers, serviceResolver, pluginInitializers, admissionPostStartHook, storageFactory, err := buildGenericConfig(s.ServerRunOptions, proxyTransport)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 
+	// 2、初始化所支持的 capabilities
 	capabilities.Initialize(capabilities.Capabilities{
 		AllowPrivileged: s.AllowPrivileged,
 		// TODO(vmarmol): Implement support for HostNetworkSources.
@@ -262,6 +285,7 @@ func CreateKubeAPIServerConfig(s completedServerRunOptions) (
 
 	s.Logs.Apply()
 
+	// 3. 构建 config 对象
 	config := &controlplane.Config{
 		GenericConfig: genericConfig,
 		ExtraConfig: controlplane.ExtraConfig{
@@ -284,7 +308,7 @@ func CreateKubeAPIServerConfig(s completedServerRunOptions) (
 			EndpointReconcilerType: reconcilers.Type(s.EndpointReconcilerType),
 			MasterCount:            s.MasterCount,
 
-			ServiceAccountIssuer:        s.ServiceAccountIssuer,
+			ServiceAccountIssuer:        s.ServiceAccountIssuer,  // 貌似用于 服务账号令牌签发
 			ServiceAccountMaxExpiration: s.ServiceAccountTokenMaxExpiration,
 			ExtendExpiration:            s.Authentication.ServiceAccounts.ExtendExpiration,
 
@@ -349,6 +373,7 @@ func CreateKubeAPIServerConfig(s completedServerRunOptions) (
 	return config, serviceResolver, pluginInitializers, nil
 }
 
+// 创建通用的配置文件
 // BuildGenericConfig takes the master server options and produces the genericapiserver.Config associated with it
 func buildGenericConfig(
 	s *options.ServerRunOptions,
@@ -362,13 +387,17 @@ func buildGenericConfig(
 	storageFactory *serverstorage.DefaultStorageFactory,
 	lastErr error,
 ) {
+	// 1、为 genericConfig 设置默认值
 	genericConfig = genericapiserver.NewConfig(legacyscheme.Codecs)
+	// 配置启动、禁用GV
+	// 2、加载需要启用的 API Resource，集群中所有的 API Resource 可以在代码的 k8s.io/api 目录中看到，随着版本的迭代也会不断变化；
 	genericConfig.MergedResourceConfig = controlplane.DefaultAPIResourceConfigSource()
 
 	if lastErr = s.GenericServerRunOptions.ApplyTo(genericConfig); lastErr != nil {
 		return
 	}
 
+	// 生成了 loopbackclientconfig，并配置了 genericConfig.SecureServing
 	if lastErr = s.SecureServing.ApplyTo(&genericConfig.SecureServing, &genericConfig.LoopbackClientConfig); lastErr != nil {
 		return
 	}
@@ -387,6 +416,9 @@ func buildGenericConfig(
 		}
 	}
 
+	// 3、为 genericConfig 中的部分字段设置默认值；
+	// openapi/swagger配置
+	// OpenAPIConfig用于生成OpenAPI规范
 	genericConfig.OpenAPIConfig = genericapiserver.DefaultOpenAPIConfig(generatedopenapi.GetOpenAPIDefinitions, openapinamer.NewDefinitionNamer(legacyscheme.Scheme, extensionsapiserver.Scheme, aggregatorscheme.Scheme))
 	genericConfig.OpenAPIConfig.Info.Title = "Kubernetes"
 	genericConfig.LongRunningFunc = filters.BasicLongRunningRequestCheck(
@@ -397,6 +429,9 @@ func buildGenericConfig(
 	kubeVersion := version.Get()
 	genericConfig.Version = &kubeVersion
 
+	// etcd配置
+	// storageFactoryConfig对象定义了kube-apiserver与etcd的交互方式，如：etcd认证、地址、存储前缀等
+	// 该对象也定义了资源存储方式，如：资源信息、资源编码信息、资源状态等
 	storageFactoryConfig := kubeapiserver.NewStorageFactoryConfig()
 	storageFactoryConfig.APIResourceConfig = genericConfig.MergedResourceConfig
 	completedStorageFactoryConfig, err := storageFactoryConfig.Complete(s.Etcd)
@@ -404,6 +439,7 @@ func buildGenericConfig(
 		lastErr = err
 		return
 	}
+	//4、创建 storageFactory，后面会使用 storageFactory 为每种API Resource 创建对应的 RESTStorage；
 	storageFactory, lastErr = completedStorageFactoryConfig.New()
 	if lastErr != nil {
 		return
@@ -414,10 +450,12 @@ func buildGenericConfig(
 	if utilfeature.DefaultFeatureGate.Enabled(genericfeatures.APIServerTracing) && genericConfig.TracerProvider != nil {
 		storageFactory.StorageConfig.Transport.TracerProvider = genericConfig.TracerProvider
 	}
+	// 2、初始化 RESTOptionsGetter，后期根据其获取操作 Etcd 的句柄，同时添加 etcd 的健康检查方法
 	if lastErr = s.Etcd.ApplyWithStorageFactoryTo(storageFactory, genericConfig); lastErr != nil {
 		return
 	}
 
+	//3、设置使用 protobufs 用来内部交互，并且禁用压缩功能
 	// Use protobufs for self-communication.
 	// Since not every generic apiserver has to support protobufs, we
 	// cannot default to it in generic apiserver and need to explicitly
@@ -427,19 +465,35 @@ func buildGenericConfig(
 	// on a fast local network
 	genericConfig.LoopbackClientConfig.DisableCompression = true
 
+	// 4、创建 clientset
 	kubeClientConfig := genericConfig.LoopbackClientConfig
 	clientgoExternalClient, err := clientgoclientset.NewForConfig(kubeClientConfig)
 	if err != nil {
 		lastErr = fmt.Errorf("failed to create real external clientset: %v", err)
 		return
 	}
+	// NewSharedInformerFactory初始化
 	versionedInformers = clientgoinformers.NewSharedInformerFactory(clientgoExternalClient, 10*time.Minute)
 
+	// 认证配置
+	// 内部调用 authenticatorConfig.New()
+	// k8s提供9种认证机制，每种认证机制被实例化后都成为认证器
+	// 5、创建认证实例，支持多种认证方式：请求 Header 认证、Auth 文件认证、CA 证书认证、Bearer token 认证、
+	// ServiceAccount 认证、BootstrapToken 认证、WebhookToken 认证等
 	// Authentication.ApplyTo requires already applied OpenAPIConfig and EgressSelector if present
-	if lastErr = s.Authentication.ApplyTo(&genericConfig.Authentication, genericConfig.SecureServing, genericConfig.EgressSelector, genericConfig.OpenAPIConfig, clientgoExternalClient, versionedInformers); lastErr != nil {
+	if lastErr = s.Authentication.ApplyTo(
+		&genericConfig.Authentication,
+		genericConfig.SecureServing,
+		genericConfig.EgressSelector,
+		genericConfig.OpenAPIConfig,
+		clientgoExternalClient,
+		versionedInformers); lastErr != nil {
 		return
 	}
 
+	// 6、创建鉴权实例，包含：Node、RBAC、Webhook、ABAC、AlwaysAllow、AlwaysDeny
+	// 授权配置
+	// k8e提供6种授权机制，每种授权机制被实例化后都成为授权器
 	genericConfig.Authorization.Authorizer, genericConfig.RuleResolver, err = BuildAuthorizer(s, genericConfig.EgressSelector, versionedInformers)
 	if err != nil {
 		lastErr = fmt.Errorf("invalid authorization config: %v", err)
@@ -449,11 +503,18 @@ func buildGenericConfig(
 		genericConfig.DisabledPostStartHooks.Insert(rbacrest.PostStartHookName)
 	}
 
+	// 7、审计插件的初始化
 	lastErr = s.Audit.ApplyTo(genericConfig)
 	if lastErr != nil {
 		return
 	}
 
+	// 8、准入插件的初始化
+	// 准入器admission配置
+	// k8s资源在认证和授权通过，被持久化到etcd之前进入准入控制逻辑
+	// 准入控制包括：对请求的资源进行自定义操作（校验、修改、拒绝）
+	// k8s支持31种准入控制
+	// 准入控制器通过Plugins数据结构统一注册、存放、管理
 	admissionConfig := &kubeapiserveradmission.Config{
 		ExternalInformers:    versionedInformers,
 		LoopbackClientConfig: genericConfig.LoopbackClientConfig,
@@ -466,6 +527,7 @@ func buildGenericConfig(
 		return
 	}
 
+	// genericConfig.admissionControl 赋值：admission handler 生成
 	err = s.Admission.ApplyTo(
 		genericConfig,
 		versionedInformers,
@@ -486,7 +548,7 @@ func buildGenericConfig(
 
 // BuildAuthorizer constructs the authorizer
 func BuildAuthorizer(s *options.ServerRunOptions, EgressSelector *egressselector.EgressSelector, versionedInformers clientgoinformers.SharedInformerFactory) (authorizer.Authorizer, authorizer.RuleResolver, error) {
-	authorizationConfig := s.Authorization.ToAuthorizationConfig(versionedInformers)
+	authorizationConfig := s.Authorization.ToAuthorizationConfig(versionedInformers)  // 授权部分的配置
 
 	if EgressSelector != nil {
 		egressDialer, err := EgressSelector.Lookup(egressselector.ControlPlane.AsNetworkContext())
@@ -517,11 +579,13 @@ type completedServerRunOptions struct {
 	*options.ServerRunOptions
 }
 
+// 设置 ServerRunOptions 的默认值，之前并没有生成默认值
 // Complete set default ServerRunOptions.
 // Should be called after kube-apiserver flags parsed.
 func Complete(s *options.ServerRunOptions) (completedServerRunOptions, error) {
 	var options completedServerRunOptions
 	// set defaults
+	// 如果没有传入参数 AdvertiseAddress，那么就使用默认的 hostIP "0.0.0.0"
 	if err := s.GenericServerRunOptions.DefaultAdvertiseAddress(s.SecureServing.SecureServingOptions); err != nil {
 		return options, err
 	}
@@ -536,6 +600,7 @@ func Complete(s *options.ServerRunOptions) (completedServerRunOptions, error) {
 	s.SecondaryServiceClusterIPRange = secondaryServiceIPRange
 	s.APIServerServiceIP = apiServerServiceIP
 
+	// 生成了自签的证书：s.ServerCert.CertKey 字段：/var/run/kubernetes/apiserver.crt/key
 	if err := s.SecureServing.MaybeDefaultWithSelfSignedCerts(s.GenericServerRunOptions.AdvertiseAddress.String(), []string{"kubernetes.default.svc", "kubernetes.default", "kubernetes"}, []net.IP{apiServerServiceIP}); err != nil {
 		return options, fmt.Errorf("error creating self-signed certificates: %v", err)
 	}
@@ -553,6 +618,7 @@ func Complete(s *options.ServerRunOptions) (completedServerRunOptions, error) {
 		klog.Infof("external host was not specified, using %v", s.GenericServerRunOptions.ExternalHost)
 	}
 
+	// 认证的一些配置设置
 	s.Authentication.ApplyAuthorization(s.Authorization)
 
 	// Use (ServiceAccountSigningKeyFile != "") as a proxy to the user enabling
@@ -562,6 +628,9 @@ func Complete(s *options.ServerRunOptions) (completedServerRunOptions, error) {
 	// remove this problematic defaulting.
 	if s.ServiceAccountSigningKeyFile == "" {
 		// Default to the private server key for service account token signing
+		//  s.SecureServing.ServerCert.CertKey.KeyFile 在 apiserver 启动时，输入参数的值为：/etc/kubernetes/pki/apiserver.key
+		// 如果没有输入的话，应该是生成之后放在 /var/run/kubernetes/apiserver.key
+		// apiserver 启动时，会传入参数：s.Authentication.ServiceAccounts.KeyFiles：--service-account-key-file=/etc/kubernetes/pki/sa.pub
 		if len(s.Authentication.ServiceAccounts.KeyFiles) == 0 && s.SecureServing.ServerCert.CertKey.KeyFile != "" {
 			if kubeauthenticator.IsValidServiceAccountKeyFile(s.SecureServing.ServerCert.CertKey.KeyFile) {
 				s.Authentication.ServiceAccounts.KeyFiles = []string{s.SecureServing.ServerCert.CertKey.KeyFile}
@@ -571,8 +640,9 @@ func Complete(s *options.ServerRunOptions) (completedServerRunOptions, error) {
 		}
 	}
 
+	// 如果提供了 私钥文件路径，并且服务账户令牌发行者 不为空——说明这个私钥是这个服务账户令牌发行者的，发行者通过这个私钥来签署 token
 	if s.ServiceAccountSigningKeyFile != "" && len(s.Authentication.ServiceAccounts.Issuers) != 0 && s.Authentication.ServiceAccounts.Issuers[0] != "" {
-		sk, err := keyutil.PrivateKeyFromFile(s.ServiceAccountSigningKeyFile)
+		sk, err := keyutil.PrivateKeyFromFile(s.ServiceAccountSigningKeyFile)  // 获取私钥内容
 		if err != nil {
 			return options, fmt.Errorf("failed to parse service-account-issuer-key-file: %v", err)
 		}
@@ -593,10 +663,12 @@ func Complete(s *options.ServerRunOptions) (completedServerRunOptions, error) {
 			}
 		}
 
+		// 服务账户令牌发行者，用于签发证书（需要包含私钥证书）
 		s.ServiceAccountIssuer, err = serviceaccount.JWTTokenGenerator(s.Authentication.ServiceAccounts.Issuers[0], sk)
 		if err != nil {
 			return options, fmt.Errorf("failed to build token generator: %v", err)
 		}
+		// 证书过期时间
 		s.ServiceAccountTokenMaxExpiration = s.Authentication.ServiceAccounts.MaxExpiration
 	}
 

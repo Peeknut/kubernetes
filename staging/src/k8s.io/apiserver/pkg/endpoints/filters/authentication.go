@@ -50,6 +50,7 @@ func withAuthentication(handler http.Handler, auth authenticator.Request, failed
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		authenticationStart := time.Now()
 
+		// 这个参数是什么意思
 		if len(apiAuds) > 0 {
 			req = req.WithContext(authenticator.WithAudiences(req.Context(), apiAuds))
 		}

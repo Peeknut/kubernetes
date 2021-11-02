@@ -45,7 +45,9 @@ var InsecurePortFlags = []string{"insecure-port", "port"}
 
 // ServerRunOptions runs a kubernetes api server.
 type ServerRunOptions struct {
+	// kube-apiserver系列服务基础配置项
 	GenericServerRunOptions *genericoptions.ServerRunOptions
+	// 后端存储etcd的配置项
 	Etcd                    *genericoptions.EtcdOptions
 	SecureServing           *genericoptions.SecureServingOptionsWithLoopback
 	Audit                   *genericoptions.AuditOptions
@@ -88,9 +90,14 @@ type ServerRunOptions struct {
 	IdentityLeaseDurationSeconds      int
 	IdentityLeaseRenewIntervalSeconds int
 
-	ServiceAccountSigningKeyFile     string
-	ServiceAccountIssuer             serviceaccount.TokenGenerator
-	ServiceAccountTokenMaxExpiration time.Duration
+	// 由于 ServerRunOptions 中的
+	//  ServiceAccountSigningKeyFile     string
+	//	ServiceAccountIssuer             serviceaccount.TokenGenerator
+	//	ServiceAccountTokenMaxExpiration time.Duration
+	// 好像是 apiserver 用于 serviceaccount token 签发的，sidecar 没有这个功能，所以注释了——但是不确定验证 token 的时候需不需要发行者
+	ServiceAccountSigningKeyFile     string  // // 包含服务帐户令牌颁发者的当前私钥的文件的路径。 发行人将使用此私钥签署已发行的 ID 令牌。	// 默认值为空
+	ServiceAccountIssuer             serviceaccount.TokenGenerator  // 通过 ServiceAccountSigningKeyFile 和 认证那边的参数 issuer 共同生成
+	ServiceAccountTokenMaxExpiration time.Duration  // 通过认证那边的参数赋值
 
 	ShowHiddenMetricsForVersion string
 }
@@ -103,9 +110,9 @@ func NewServerRunOptions() *ServerRunOptions {
 		SecureServing:           kubeoptions.NewSecureServingOptions(),
 		Audit:                   genericoptions.NewAuditOptions(),
 		Features:                genericoptions.NewFeatureOptions(),
-		Admission:               kubeoptions.NewAdmissionOptions(),
-		Authentication:          kubeoptions.NewBuiltInAuthenticationOptions().WithAll(),
-		Authorization:           kubeoptions.NewBuiltInAuthorizationOptions(),
+		Admission:               kubeoptions.NewAdmissionOptions(),  // 准入的参数：注册了lifecycle、validatingwebhook、mutatingwebhook三个插件，和内置的admission插件（都只是名字）
+		Authentication:          kubeoptions.NewBuiltInAuthenticationOptions().WithAll(),  // 认证的参数
+		Authorization:           kubeoptions.NewBuiltInAuthorizationOptions(),  // 授权的参数
 		CloudProvider:           kubeoptions.NewCloudProviderOptions(),
 		APIEnablement:           genericoptions.NewAPIEnablementOptions(),
 		EgressSelector:          genericoptions.NewEgressSelectorOptions(),
@@ -145,6 +152,7 @@ func NewServerRunOptions() *ServerRunOptions {
 	return &s
 }
 
+// 非安全端口
 // TODO: remove these insecure flags in v1.24
 func addDummyInsecureFlags(fs *pflag.FlagSet) {
 	var (
@@ -165,6 +173,7 @@ func addDummyInsecureFlags(fs *pflag.FlagSet) {
 	}
 }
 
+// apiserver 各个 options 添加参数
 // Flags returns flags for a specific APIServer by section name
 func (s *ServerRunOptions) Flags() (fss cliflag.NamedFlagSets) {
 	// Add the generic flags.
@@ -174,7 +183,7 @@ func (s *ServerRunOptions) Flags() (fss cliflag.NamedFlagSets) {
 	addDummyInsecureFlags(fss.FlagSet("insecure serving"))
 	s.Audit.AddFlags(fss.FlagSet("auditing"))
 	s.Features.AddFlags(fss.FlagSet("features"))
-	s.Authentication.AddFlags(fss.FlagSet("authentication"))
+	s.Authentication.AddFlags(fss.FlagSet("authentication"))  // 认证器的参数
 	s.Authorization.AddFlags(fss.FlagSet("authorization"))
 	s.CloudProvider.AddFlags(fss.FlagSet("cloud provider"))
 	s.APIEnablement.AddFlags(fss.FlagSet("API enablement"))
@@ -268,6 +277,8 @@ func (s *ServerRunOptions) Flags() (fss cliflag.NamedFlagSets) {
 	fs.BoolVar(&s.EnableAggregatorRouting, "enable-aggregator-routing", s.EnableAggregatorRouting,
 		"Turns on aggregator routing requests to endpoints IP rather than cluster IP.")
 
+	// 包含服务帐户令牌颁发者的当前私钥的文件的路径。 发行人将使用此私钥签署已发行的 ID 令牌。
+	// 默认值为空
 	fs.StringVar(&s.ServiceAccountSigningKeyFile, "service-account-signing-key-file", s.ServiceAccountSigningKeyFile, ""+
 		"Path to the file that contains the current private key of the service account token issuer. The issuer will sign issued ID tokens with this private key.")
 

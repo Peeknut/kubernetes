@@ -96,7 +96,7 @@ func ParseGroupResource(gr string) GroupResource {
 type GroupVersionResource struct {
 	Group    string
 	Version  string
-	Resource string
+	Resource string  // 表示是否为 ns 资源？
 }
 
 func (gvr GroupVersionResource) Empty() bool {
@@ -137,6 +137,12 @@ func (gk GroupKind) String() string {
 	return gk.Kind + "." + gk.Group
 }
 
+
+// GroupVersionKind才是kubernetes的API对象类型真身，他包括Kind、Version和Group。其中Kind和
+// Version还比较好理解，Group又是什么？其实Group/Version才是xxx.yaml的apiVersion字段。
+// 在kuberentes中API对象是分组的，像Pod、Service、ConfigMap都属于core分组，而core分组的对象
+// 无需在apiVersion字段明文写出来，系统会默认将这类的对象归为core分组，正如文章开始那个Pod的例子。
+// 详情可以看下面的代码实现。
 // GroupVersionKind unambiguously identifies a kind.  It doesn't anonymously include GroupVersion
 // to avoid automatic coercion.  It doesn't use a GroupVersion to avoid custom marshalling
 type GroupVersionKind struct {
@@ -187,17 +193,24 @@ func (gv GroupVersion) Identifier() string {
 	return gv.String()
 }
 
+// TODO：这个函数的作用是什么？——从 kinds 中选中某个 gv 的 gvk 信息？
+// gv：v1/apps	kinds：v1/core/pod, v1/core/node, beta1/apps/pod, v1/apps/pod
+
+// KindForGroupVersionKinds 从列表中标识首选的 GroupVersionKind。
 // KindForGroupVersionKinds identifies the preferred GroupVersionKind out of a list. It returns ok false
 // if none of the options match the group. It prefers a match to group and version over just group.
 // TODO: Move GroupVersion to a package under pkg/runtime, since it's used by scheme.
 // TODO: Introduce an adapter type between GroupVersion and runtime.GroupVersioner, and use LegacyCodec(GroupVersion)
 //   in fewer places.
 func (gv GroupVersion) KindForGroupVersionKinds(kinds []GroupVersionKind) (target GroupVersionKind, ok bool) {
+	// 如果 kinds 中有 gv 信息匹配，返回 gvk 信息
 	for _, gvk := range kinds {
 		if gvk.Group == gv.Group && gvk.Version == gv.Version {
 			return gvk, true
 		}
 	}
+	// 如果 kinds 中没有 gv 信息匹配，但是有 group 信息匹配，返回 gv 信息+给定的kind 信息。
+	// 综上来看，返回的 gvk 信息，gv 信息不是使用参数的，kind 信息根据 gv 信息的匹配情况来选择。
 	for _, gvk := range kinds {
 		if gvk.Group == gv.Group {
 			return gv.WithKind(gvk.Kind), true
@@ -206,21 +219,28 @@ func (gv GroupVersion) KindForGroupVersionKinds(kinds []GroupVersionKind) (targe
 	return GroupVersionKind{}, false
 }
 
+
+// 从apiVersion解析Group和Version。
 // ParseGroupVersion turns "group/version" string into a GroupVersion struct. It reports error
 // if it cannot parse the string.
 func ParseGroupVersion(gv string) (GroupVersion, error) {
+	// 这种不报错是什么道理？什么情况下会有对象没有Group和Version？
 	// this can be the internal version for the legacy kube types
 	// TODO once we've cleared the last uses as strings, this special case should be removed.
 	if (len(gv) == 0) || (gv == "/") {
 		return GroupVersion{}, nil
 	}
 
+	// 数apiVersion中有几个‘/
 	switch strings.Count(gv, "/") {
+	// 没有'/'，就像文章开始的Pod的例子，那么Group就是空字符串，系统默认会把空字符串归为core
 	case 0:
 		return GroupVersion{"", gv}, nil
+	// 有一个'/'，那么就以'/'分割apiVersion，左边为Group，右边为Version。
 	case 1:
 		i := strings.Index(gv, "/")
 		return GroupVersion{gv[:i], gv[i+1:]}, nil
+	// 其他则为格式错误。
 	default:
 		return GroupVersion{}, fmt.Errorf("unexpected GroupVersion string: %v", gv)
 	}
@@ -251,6 +271,8 @@ func (gvs GroupVersions) Identifier() string {
 	return fmt.Sprintf("[%s]", strings.Join(groupVersions, ","))
 }
 
+// TODO：作用是什么？
+// gv：v1/apps，beta2/apps	kinds：v1/core/pod, v1/core/node, beta1/apps/pod, v1/apps/pod
 // KindForGroupVersionKinds identifies the preferred GroupVersionKind out of a list. It returns ok false
 // if none of the options match the group.
 func (gvs GroupVersions) KindForGroupVersionKinds(kinds []GroupVersionKind) (GroupVersionKind, bool) {
@@ -276,6 +298,7 @@ func (gvs GroupVersions) KindForGroupVersionKinds(kinds []GroupVersionKind) (Gro
 func bestMatch(kinds []GroupVersionKind, targets []GroupVersionKind) GroupVersionKind {
 	for _, gvk := range targets {
 		for _, k := range kinds {
+			// 因为 gv.KindForGroupVersionKinds 有可能 version 是不匹配的，所以这不是最优选择
 			if k == gvk {
 				return k
 			}
@@ -293,6 +316,9 @@ func (gvk GroupVersionKind) ToAPIVersionAndKind() (string, string) {
 	return gvk.GroupVersion().String(), gvk.Kind
 }
 
+
+// 这个函数在metav1.TypeMeta实现GroupVersionKind()接口的时候调用了，该函数调用了ParseGroupVersion
+// 实现从apiVersion解析Group和Version。
 // FromAPIVersionAndKind returns a GVK representing the provided fields for types that
 // do not use TypeMeta. This method exists to support test types and legacy serializations
 // that have a distinct group and kind.

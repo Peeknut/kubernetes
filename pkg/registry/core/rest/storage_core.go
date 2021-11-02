@@ -102,6 +102,7 @@ type LegacyRESTStorage struct {
 	ServiceNodePortAllocator           rangeallocation.RangeRegistry
 }
 
+// 在NewLegacyRESTStorage方法中，通过NewREST或者NewStorage会生成各种资源对应的 Storage
 func (c LegacyRESTStorageProvider) NewLegacyRESTStorage(restOptionsGetter generic.RESTOptionsGetter) (LegacyRESTStorage, genericapiserver.APIGroupInfo, error) {
 	apiGroupInfo := genericapiserver.APIGroupInfo{
 		PrioritizedVersions:          legacyscheme.Scheme.PrioritizedVersionsForGroup(""),
@@ -115,6 +116,7 @@ func (c LegacyRESTStorageProvider) NewLegacyRESTStorage(restOptionsGetter generi
 	if err != nil {
 		return LegacyRESTStorage{}, genericapiserver.APIGroupInfo{}, err
 	}
+	// 1、LegacyAPI 下的 resource RESTStorage 的初始化
 	restStorage := LegacyRESTStorage{}
 
 	podTemplateStorage, err := podtemplatestore.NewREST(restOptionsGetter)
@@ -167,6 +169,9 @@ func (c LegacyRESTStorageProvider) NewLegacyRESTStorage(restOptionsGetter generi
 		return LegacyRESTStorage{}, genericapiserver.APIGroupInfo{}, err
 	}
 
+	// 2、pod RESTStorage 的初始化
+	// podstore.NewStorage 是为 pod 生成 storage 的方法，
+	// 该方法主要功能是为 pod 创建后端存储最终返回一个 RESTStorage 对象，其中调用 store.CompleteWithOptions 来创建后端存储的。
 	podStorage, err := podstore.NewStorage(
 		restOptionsGetter,
 		nodeStorage.KubeletConnectionInfo,
@@ -267,6 +272,7 @@ func (c LegacyRESTStorageProvider) NewLegacyRESTStorage(restOptionsGetter generi
 		serviceNodePortAllocator,
 		c.ProxyTransport)
 
+	// 3、restStorageMap 保存 resource http path 与 RESTStorage 对应关系
 	restStorageMap := map[string]rest.Storage{
 		"pods":             podStorage.Pod,
 		"pods/attach":      podStorage.Attach,

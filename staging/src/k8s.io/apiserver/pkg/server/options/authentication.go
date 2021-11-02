@@ -137,6 +137,7 @@ func (s *RequestHeaderAuthenticationOptions) ToAuthenticationRequestHeaderConfig
 // ClientCertAuthenticationOptions provides different options for client cert auth. You should use `GetClientVerifyOptionFn` to
 // get the verify options for your authenticator.
 type ClientCertAuthenticationOptions struct {
+	// ca 证书
 	// ClientCA is the certificate bundle for all the signers that you'll recognize for incoming client certificates
 	ClientCA string
 
@@ -152,6 +153,7 @@ func (s *ClientCertAuthenticationOptions) GetClientCAContentProvider() (dynamicc
 		return s.CAContentProvider, nil
 	}
 
+	// apiserver 启动的时候，传入了参数：s.ClientCA：--client-ca-file=/etc/kubernetes/pki/ca.crt
 	if len(s.ClientCA) == 0 {
 		return nil, nil
 	}
@@ -160,6 +162,8 @@ func (s *ClientCertAuthenticationOptions) GetClientCAContentProvider() (dynamicc
 }
 
 func (s *ClientCertAuthenticationOptions) AddFlags(fs *pflag.FlagSet) {
+	//apiserver 启动的时候传入了参数：--client-ca-file=/etc/kubernetes/pki/ca.crt
+	// “如果设置，则任何提供由客户端 CA 文件中的某个机构签署的客户端证书的请求都将使用与客户端证书的 CommonName 相对应的身份进行身份验证。
 	fs.StringVar(&s.ClientCA, "client-ca-file", s.ClientCA, ""+
 		"If set, any request presenting a client certificate signed by one of "+
 		"the authorities in the client-ca-file is authenticated with an identity "+

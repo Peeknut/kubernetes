@@ -89,14 +89,24 @@ func ListAccessor(obj interface{}) (List, error) {
 // interfaces.
 var errNotObject = fmt.Errorf("object does not implement the Object interfaces")
 
+// Accessor()函数可以把obj安全的转换为metav1.Object，这样也就避免了每个API对象类型都需要实现
+// 类似GetObjectMeta()的接口了。有的读者肯定会问：所有的API对象都继承了metav1.ObjectMeta，
+// 这个类型不是实现了GetObjectMeta()么？笔者就要在这里做出说明：笔者提到是类似GetObjectMeta()，
+// 如果接口名字是ObjectMeta()，那岂不是继承metav1.ObjectMeta就没用了？一个顶层的类型抽象定义不
+// 应该依赖于相对底层类型的实现。
 // Accessor takes an arbitrary object pointer and returns meta.Interface.
 // obj must be a pointer to an API type. An error is returned if the minimum
 // required fields are missing. Fields that are not required return the default
 // value and are a no-op if set.
 func Accessor(obj interface{}) (metav1.Object, error) {
 	switch t := obj.(type) {
+	// 因为API对象类型都继承了metav1.ObjectMeta，也就自然实现了metav1.Object。
 	case metav1.Object:
 		return t, nil
+	// 在ObjectMeta章节笔者提到了，metav1.ObjectMeta实现了metav1.ObjectMetaAccessor，
+	// 所以API对象也自然实现了metav1.ObjectMetaAccessor。但是API对象会在上一个case就返回
+	// 了，这个case是给谁用的呢？笔者也比较疑惑，笔者感觉是那些没有直接继承metav1.ObjectMeta
+	// 却实现了metav1.ObjectMetaAccessor的类型，笔者暂时还没找到相关类型定义。
 	case metav1.ObjectMetaAccessor:
 		if m := t.GetObjectMeta(); m != nil {
 			return m, nil

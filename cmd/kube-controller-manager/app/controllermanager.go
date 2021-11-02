@@ -100,13 +100,16 @@ func checkNonZeroInsecurePort(fs *pflag.FlagSet) error {
 	return nil
 }
 
+// -1-
 // NewControllerManagerCommand creates a *cobra.Command object with default parameters
 func NewControllerManagerCommand() *cobra.Command {
+	// 1. 创建 options
 	s, err := options.NewKubeControllerManagerOptions()
 	if err != nil {
 		klog.Fatalf("unable to initialize command options: %v", err)
 	}
 
+	// 2. 创建 command
 	cmd := &cobra.Command{
 		Use: "kube-controller-manager",
 		Long: `The Kubernetes controller manager is a daemon that embeds
@@ -126,7 +129,7 @@ controller, and serviceaccounts controller.`,
 		},
 		Run: func(cmd *cobra.Command, args []string) {
 			verflag.PrintAndExitIfRequested()
-			cliflag.PrintFlags(cmd.Flags())
+			cliflag.PrintFlags(cmd.Flags())  // log 记录传入的参数
 
 			err := checkNonZeroInsecurePort(cmd.Flags())
 			if err != nil {
@@ -134,12 +137,16 @@ controller, and serviceaccounts controller.`,
 				os.Exit(1)
 			}
 
-			c, err := s.Config(KnownControllers(), ControllersDisabledByDefault.List())
+			// 4. 根据 option 创建 config
+			// 只是简单的将输入参数--controllers 的内容赋值给 c 的相关字段，并不进行真正的处理
+			c, err := s.Config(KnownControllers(), ControllersDisabledByDefault.List())  // 这里进去可以看到怎么处理参数 --controllers 的
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "%v\n", err)
 				os.Exit(1)
 			}
 
+			// 5. 补全 config
+			// 6. 运行 Run 函数（一般传入 config、stop channel）
 			if err := Run(c.Complete(), wait.NeverStop); err != nil {
 				fmt.Fprintf(os.Stderr, "%v\n", err)
 				os.Exit(1)
@@ -155,8 +162,9 @@ controller, and serviceaccounts controller.`,
 		},
 	}
 
+	// 3. 添加参数
 	fs := cmd.Flags()
-	namedFlagSets := s.Flags(KnownControllers(), ControllersDisabledByDefault.List())
+	namedFlagSets := s.Flags(KnownControllers(), ControllersDisabledByDefault.List())  // 添加了 kcm 的参数
 	verflag.AddFlags(namedFlagSets.FlagSet("global"))
 	globalflag.AddGlobalFlags(namedFlagSets.FlagSet("global"), cmd.Name())
 	registerLegacyGlobalFlags(namedFlagSets)
@@ -180,17 +188,21 @@ func ResyncPeriod(c *config.CompletedConfig) func() time.Duration {
 	}
 }
 
+// Run 一般接收参数：1）config；2）stop channel
+// 	   函数一般不会退出
 // Run runs the KubeControllerManagerOptions.  This should never exit.
 func Run(c *config.CompletedConfig, stopCh <-chan struct{}) error {
 	// To help debugging, immediately log version
 	klog.Infof("Version: %+v", version.Get())
 
-	if cfgz, err := configz.New(ConfigzName); err == nil {
+	// 配置存放到全局配置中，configz实现了一个全局的配置功能，并且可以安装到HTTP服务中对外提供http访问配置的能力
+	if cfgz, err := configz.New(ConfigzName); err == nil {  // 貌似是注册 config 的，即一个 configname，应该只能注册一次
 		cfgz.Set(c.ComponentConfig)
 	} else {
 		klog.Errorf("unable to register configz: %v", err)
 	}
 
+	// Q：这里的健康检查是检查什么？
 	// Setup any healthz checks we will want to use.
 	var checks []healthz.HealthChecker
 	var electionChecker *leaderelection.HealthzAdaptor
@@ -199,6 +211,7 @@ func Run(c *config.CompletedConfig, stopCh <-chan struct{}) error {
 		checks = append(checks, electionChecker)
 	}
 
+	// Q：kcm 的 http server 是什么？
 	// Start the controller manager HTTP server
 	// unsecuredMux is the handler for these controller *after* authn/authz filters have been applied
 	var unsecuredMux *mux.PathRecorderMux
@@ -211,31 +224,39 @@ func Run(c *config.CompletedConfig, stopCh <-chan struct{}) error {
 		}
 	}
 
+	// 貌似是构建器，用于创建到 API Server 的各种连接的构建器。
+	// 由于 controller 中会有多种到 API Server 的连接，为了区分它们，就需要基于构建器来完成，
+	// 在构建时会生成不同的 Agent Name，从而能够根据 Agent Name 进行区分
 	clientBuilder, rootClientBuilder := createClientBuilders(c)
 
-	saTokenControllerInitFunc := serviceAccountTokenControllerStarter{rootClientBuilder: rootClientBuilder}.startServiceAccountTokenController
+	saTokenControllerInitFunc := serviceAccountTokenControllerStarter{rootClientBuilder: rootClientBuilder}.startServiceAccountTokenController  // 函数指针
 
+	// 成为 leader 之后才会运行的 run 方法
+	// 参数：1）上下文；2）serviceaccount-token controlelr 的启动函数；3）其他 controller 的启动函数
 	run := func(ctx context.Context, startSATokenController InitFunc, initializersFunc ControllerInitializersFunc) {
 
-		controllerContext, err := CreateControllerContext(c, rootClientBuilder, clientBuilder, ctx.Done())
+		// 1. 创建上下文
+		controllerContext, err := CreateControllerContext(c, rootClientBuilder, clientBuilder, ctx.Done())  // ctx.Done() 返回一个 channel，controllerContext 中包含了 c
 		if err != nil {
 			klog.Fatalf("error building controller context: %v", err)
 		}
-		controllerInitializers := initializersFunc(controllerContext.LoopMode)
+		// 2. 启动控制器
+		controllerInitializers := initializersFunc(controllerContext.LoopMode)  // 返回所有controller的启动函数
 		if err := StartControllers(controllerContext, startSATokenController, controllerInitializers, unsecuredMux); err != nil {
 			klog.Fatalf("error starting controllers: %v", err)
 		}
 
-		controllerContext.InformerFactory.Start(controllerContext.Stop)
+		// 3. 启动 informer
+		controllerContext.InformerFactory.Start(controllerContext.Stop)  // // 启动Informer工厂实例，在这里会启动各种类型的通知实例，新的资源变更，会源源不断的作为事件传输过来。
 		controllerContext.ObjectOrMetadataInformerFactory.Start(controllerContext.Stop)
-		close(controllerContext.InformersStarted)
+		close(controllerContext.InformersStarted)  // 这时候可以安全启动Informers，然而，Informers其实已经在InformerFactory中启动了。？？？？
 
-		select {}
+		select {}  // 阻塞
 	}
 
 	// No leader election, run directly
 	if !c.ComponentConfig.Generic.LeaderElection.LeaderElect {
-		run(context.TODO(), saTokenControllerInitFunc, NewControllerInitializers)
+		run(context.TODO(), saTokenControllerInitFunc, NewControllerInitializers)  // context.TODO() 返回一个空的 context
 		panic("unreachable")
 	}
 
@@ -312,7 +333,7 @@ func Run(c *config.CompletedConfig, stopCh <-chan struct{}) error {
 			})
 	}
 
-	select {}
+	select {}  // select 类似 switch，如果没有一个 case 可以运行，那么会一直阻塞。这里就会一直阻塞，不会结束这个函数
 }
 
 // ControllerContext defines the context object for controller
@@ -363,6 +384,7 @@ type ControllerContext struct {
 }
 
 // IsControllerEnabled checks if the context's controllers enabled or not
+// 判断controller 是否开启
 func (c ControllerContext) IsControllerEnabled(name string) bool {
 	return genericcontrollermanager.IsControllerEnabled(name, ControllersDisabledByDefault, c.ComponentConfig.Generic.Controllers)
 }
@@ -379,6 +401,7 @@ type ControllerInitializersFunc func(loopMode ControllerLoopMode) (initializers 
 var _ ControllerInitializersFunc = NewControllerInitializers
 
 // KnownControllers returns all known controllers's name
+// 返回所有的已知的controller名字，包括默认开启和关闭的
 func KnownControllers() []string {
 	ret := sets.StringKeySet(NewControllerInitializers(IncludeCloudLoops))
 
@@ -535,6 +558,7 @@ func CreateControllerContext(s *config.CompletedConfig, rootClientBuilder, clien
 	return ctx, nil
 }
 
+// 遍历controllers（包含了所有的controller的名字，包括默认开启和关闭的），根据ControllerContext判断其是否开启， 启动开启的 controllers
 // StartControllers starts a set of controllers with a specified ControllerContext
 func StartControllers(ctx ControllerContext, startSATokenController InitFunc, controllers map[string]InitFunc, unsecuredMux *mux.PathRecorderMux) error {
 	// Always start the SA token controller first using a full-power client, since it needs to mint tokens for the rest
@@ -552,12 +576,12 @@ func StartControllers(ctx ControllerContext, startSATokenController InitFunc, co
 	}
 
 	for controllerName, initFn := range controllers {
-		if !ctx.IsControllerEnabled(controllerName) {
+		if !ctx.IsControllerEnabled(controllerName) {  // 判断参数 --controllers，是否含有这个 controller 的相关信息
 			klog.Warningf("%q is disabled", controllerName)
 			continue
 		}
 
-		time.Sleep(wait.Jitter(ctx.ComponentConfig.Generic.ControllerStartInterval.Duration, ControllerStartJitter))
+		time.Sleep(wait.Jitter(ctx.ComponentConfig.Generic.ControllerStartInterval.Duration, ControllerStartJitter))  // 等待启动控制器之间的时间间隔
 
 		klog.V(1).Infof("Starting %q", controllerName)
 		debugHandler, started, err := initFn(ctx)
@@ -580,6 +604,9 @@ func StartControllers(ctx ControllerContext, startSATokenController InitFunc, co
 	return nil
 }
 
+// service account token controller有点特殊，它必须要优先启动，为其他controller设置许可权，
+// 并且它不能使用普通的client builder，只能使用root client builder。
+// 它也不能包含在普通的初始化，必须优先启动。
 // serviceAccountTokenControllerStarter is special because it must run first to set up permissions for other controllers.
 // It cannot use the "normal" client builder, so it tracks its own. It must also avoid being included in the "normal"
 // init map so that it can always run first.
@@ -587,12 +614,15 @@ type serviceAccountTokenControllerStarter struct {
 	rootClientBuilder clientbuilder.ControllerClientBuilder
 }
 
+//ServiceAccountToken控制器的主要功能：
+//捕捉两种资源：ServiceAccount和Secrets的变化事件，基于事件中的对象，进行ServiceAccount与Token的关联检查，进行不要的ServiceAccount与Secrets的关联处理和缓存中非法数据的删除操作。
 func (c serviceAccountTokenControllerStarter) startServiceAccountTokenController(ctx ControllerContext) (http.Handler, bool, error) {
 	if !ctx.IsControllerEnabled(saTokenControllerName) {
 		klog.Warningf("%q is disabled", saTokenControllerName)
 		return nil, false, nil
 	}
 
+	// 1. service-account controller 的私钥，用于签发 token
 	if len(ctx.ComponentConfig.SAController.ServiceAccountKeyFile) == 0 {
 		klog.Warningf("%q is disabled because there is no private key", saTokenControllerName)
 		return nil, false, nil
@@ -602,6 +632,7 @@ func (c serviceAccountTokenControllerStarter) startServiceAccountTokenController
 		return nil, true, fmt.Errorf("error reading key for service account token controller: %v", err)
 	}
 
+	// 2. CA 证书
 	var rootCA []byte
 	if ctx.ComponentConfig.SAController.RootCAFile != "" {
 		if rootCA, err = readCA(ctx.ComponentConfig.SAController.RootCAFile); err != nil {
@@ -611,12 +642,13 @@ func (c serviceAccountTokenControllerStarter) startServiceAccountTokenController
 		rootCA = c.rootClientBuilder.ConfigOrDie("tokens-controller").CAData
 	}
 
+	// 3. 创建并执行 tokencontroller 实例
 	tokenGenerator, err := serviceaccount.JWTTokenGenerator(serviceaccount.LegacyIssuer, privateKey)
 	if err != nil {
 		return nil, false, fmt.Errorf("failed to build token generator: %v", err)
 	}
 	controller, err := serviceaccountcontroller.NewTokensController(
-		ctx.InformerFactory.Core().V1().ServiceAccounts(),
+		ctx.InformerFactory.Core().V1().ServiceAccounts(),  // 注意InformerFactory仍然采用通用的client builder
 		ctx.InformerFactory.Core().V1().Secrets(),
 		c.rootClientBuilder.ClientOrDie("tokens-controller"),
 		serviceaccountcontroller.TokensControllerOptions{
@@ -629,6 +661,7 @@ func (c serviceAccountTokenControllerStarter) startServiceAccountTokenController
 	}
 	go controller.Run(int(ctx.ComponentConfig.SAController.ConcurrentSATokenSyncs), ctx.Stop)
 
+	// 4. 优先启动ServiceAccounts和Secrets
 	// start the first set of informers now so that other controllers can start
 	ctx.InformerFactory.Start(ctx.Stop)
 

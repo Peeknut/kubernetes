@@ -63,6 +63,7 @@ func tokenErrorf(s *corev1.Secret, format string, i ...interface{}) {
 	klog.V(3).Infof(format, i...)
 }
 
+// 内置认证器3：BootstrapToken
 // AuthenticateToken tries to match the provided token to a bootstrap token secret
 // in a given namespace. If found, it authenticates the token in the
 // "system:bootstrappers" group and with the "system:bootstrap:(token-id)" username.
@@ -96,6 +97,7 @@ func (t *TokenAuthenticator) AuthenticateToken(ctx context.Context, token string
 		return nil, false, nil
 	}
 
+	// 获取 secret
 	secretName := bootstrapapi.BootstrapTokenSecretPrefix + tokenID
 	secret, err := t.lister.Get(secretName)
 	if err != nil {
@@ -111,13 +113,15 @@ func (t *TokenAuthenticator) AuthenticateToken(ctx context.Context, token string
 		return nil, false, nil
 	}
 
+	// 验证 secret
+	// bootstrap token 对应的 secret 格式：https://kubernetes.io/zh/docs/reference/access-authn-authz/bootstrap-tokens/#bootstrap-token-secret-format
 	if string(secret.Type) != string(bootstrapapi.SecretTypeBootstrapToken) || secret.Data == nil {
 		tokenErrorf(secret, "has invalid type, expected %s.", bootstrapapi.SecretTypeBootstrapToken)
 		return nil, false, nil
 	}
 
-	ts := bootstrapsecretutil.GetData(secret, bootstrapapi.BootstrapTokenSecretKey)
-	if subtle.ConstantTimeCompare([]byte(ts), []byte(tokenSecret)) != 1 {
+	ts := bootstrapsecretutil.GetData(secret, bootstrapapi.BootstrapTokenSecretKey)  // token 对应的 secret 信息
+	if subtle.ConstantTimeCompare([]byte(ts), []byte(tokenSecret)) != 1 {  // 比较 token 中的 secret 信息
 		tokenErrorf(secret, "has invalid value for key %s, expected %s.", bootstrapapi.BootstrapTokenSecretKey, tokenSecret)
 		return nil, false, nil
 	}

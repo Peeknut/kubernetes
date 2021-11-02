@@ -68,6 +68,7 @@ type REST struct {
 	proxyTransport http.RoundTripper
 }
 
+// 为 pod 生成 storage 的方法，该方法主要功能是为 pod 创建后端存储最终返回一个 RESTStorage 对象
 // NewStorage returns a RESTStorage object that will work against pods.
 func NewStorage(optsGetter generic.RESTOptionsGetter, k client.ConnectionInfoGetter, proxyTransport http.RoundTripper, podDisruptionBudgetClient policyclient.PodDisruptionBudgetsGetter) (PodStorage, error) {
 
@@ -91,6 +92,7 @@ func NewStorage(optsGetter generic.RESTOptionsGetter, k client.ConnectionInfoGet
 		TriggerFunc: map[string]storage.IndexerFunc{"spec.nodeName": registrypod.NodeNameTriggerFunc},
 		Indexers:    registrypod.Indexers(),
 	}
+	//调用 store.CompleteWithOptions 来创建后端存储的。
 	if err := store.CompleteWithOptions(options); err != nil {
 		return PodStorage{}, err
 	}
@@ -103,6 +105,8 @@ func NewStorage(optsGetter generic.RESTOptionsGetter, k client.ConnectionInfoGet
 
 	bindingREST := &BindingREST{store: store}
 	return PodStorage{
+		//可以看到最终返回的对象里对 pod 的不同操作都是一个 REST 对象，REST 中自动集成了 genericregistry.Store 对象，
+		//而 store.CompleteWithOptions 方法就是对 genericregistry.Store 对象中存储实例就行初始化的。
 		Pod:                 &REST{store, proxyTransport},
 		Binding:             &BindingREST{store: store},
 		LegacyBinding:       &LegacyBindingREST{bindingREST},

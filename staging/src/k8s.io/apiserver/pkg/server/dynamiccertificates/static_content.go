@@ -95,6 +95,8 @@ type staticSNICertKeyContent struct {
 	sniNames []string
 }
 
+// certPem 中会包含 ca.crt（自签的）、server.crt
+// keyPem 只包含了 server.key
 // NewStaticSNICertKeyContent returns a SNICertKeyContentProvider that always returns the same value
 func NewStaticSNICertKeyContent(name string, cert, key []byte, sniNames ...string) (SNICertKeyContentProvider, error) {
 	// Ensure that the key matches the cert and both are valid

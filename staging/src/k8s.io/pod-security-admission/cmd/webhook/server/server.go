@@ -112,7 +112,7 @@ func (s *Server) Start(ctx context.Context) error {
 	var shutdownCh <-chan struct{}
 	if s.secureServing != nil {
 		var err error
-		shutdownCh, err = s.secureServing.Serve(mux, 0, ctx.Done())
+		shutdownCh, err = s.secureServing.Serve(mux, 0, ctx.Done())  // server 运行
 		if err != nil {
 			return fmt.Errorf("failed to start secure server: %w", err)
 		}

@@ -66,7 +66,7 @@ func NewPlugin(nodeIdentifier nodeidentifier.NodeIdentifier) *Plugin {
 
 // Plugin holds state for and implements the admission plugin.
 type Plugin struct {
-	*admission.Handler
+	*admission.Handler  // 使用默认的 handler
 	nodeIdentifier nodeidentifier.NodeIdentifier
 	podsGetter     corev1lister.PodLister
 	nodesGetter    corev1lister.NodeLister

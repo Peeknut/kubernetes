@@ -51,6 +51,7 @@ func (f RequestFunc) AuthenticateRequest(req *http.Request) (*Response, bool, er
 	return f(req)
 }
 
+// 身份验证用户的信息
 // Response is the struct returned by authenticator interfaces upon successful
 // authentication. It contains information about whether the authenticator
 // authenticated the request, information about the context of the

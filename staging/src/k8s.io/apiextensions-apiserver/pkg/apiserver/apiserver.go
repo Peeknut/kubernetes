@@ -126,8 +126,10 @@ func (cfg *Config) Complete() CompletedConfig {
 	return CompletedConfig{&c}
 }
 
+// APIExtensionsServer 的初始化流程，其中最核心方法是 s.GenericAPIServer.InstallAPIGroup，也就是 API 的注册过程，三种 server 中 API 的注册过程都是其核心。
 // New returns a new instance of CustomResourceDefinitions from the given config.
 func (c completedConfig) New(delegationTarget genericapiserver.DelegationTarget) (*CustomResourceDefinitions, error) {
+	// 1、按照go-restful的模式初始化 Container
 	genericServer, err := c.GenericConfig.New("apiextensions-apiserver", delegationTarget)
 	if err != nil {
 		return nil, err
@@ -143,6 +145,7 @@ func (c completedConfig) New(delegationTarget genericapiserver.DelegationTarget)
 		return nil, err
 	}
 
+	// 2、初始化 APIGroup Info，APIGroup 指该 server 需要暴露的 API
 	apiResourceConfig := c.GenericConfig.MergedResourceConfig
 	apiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(apiextensions.GroupName, Scheme, metav1.ParameterCodec, Codecs)
 	if resourceExpirationEvaluator.ShouldServeForVersion(1, 22) && apiResourceConfig.VersionEnabled(v1beta1.SchemeGroupVersion) {
@@ -170,10 +173,18 @@ func (c completedConfig) New(delegationTarget genericapiserver.DelegationTarget)
 		apiGroupInfo.VersionedResourcesStorageMap[v1.SchemeGroupVersion.Version] = storage
 	}
 
+	// 3、注册 APIGroup
+	//调用 s.GenericAPIServer.InstallAPIGroup 在路由中注册 API Resources，此方法的调用链非常深，
+	//主要是为了将需要暴露的 API Resource 注册到 server 中，以便能通过 http 接口进行 resource 的 REST 操作，
+	//其他几种 server 在初始化时也都会执行对应的 InstallAPI；
+	//
 	if err := s.GenericAPIServer.InstallAPIGroup(&apiGroupInfo); err != nil {
 		return nil, err
 	}
 
+	// 4、初始化需要使用的 controller
+	// 初始化 server 中需要使用的 controller，主要有 openapiController、crdController、namingController、
+	// establishingController、nonStructuralSchemaController、apiApprovalController、finalizingController；
 	crdClient, err := clientset.NewForConfig(s.GenericAPIServer.LoopbackClientConfig)
 	if err != nil {
 		// it's really bad that this is leaking here, but until we can fix the test (which I'm pretty sure isn't even testing what it wants to test),
@@ -230,6 +241,7 @@ func (c completedConfig) New(delegationTarget genericapiserver.DelegationTarget)
 	)
 	openapiController := openapicontroller.NewController(s.Informers.Apiextensions().V1().CustomResourceDefinitions())
 
+	// 5、将需要启动的 controller 以及 informer 添加到 PostStartHook 中；
 	s.GenericAPIServer.AddPostStartHookOrDie("start-apiextensions-informers", func(context genericapiserver.PostStartHookContext) error {
 		s.Informers.Start(context.StopCh)
 		return nil

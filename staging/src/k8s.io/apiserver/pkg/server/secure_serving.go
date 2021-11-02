@@ -41,6 +41,7 @@ const (
 	defaultKeepAlivePeriod = 3 * time.Minute
 )
 
+// apiserver 作为服务端的连接配置
 // tlsConfig produces the tls.Config to serve with.
 func (s *SecureServingInfo) tlsConfig(stopCh <-chan struct{}) (*tls.Config, error) {
 	tlsConfig := &tls.Config{
@@ -197,6 +198,7 @@ func (s *SecureServingInfo) Serve(handler http.Handler, shutdownTimeout time.Dur
 	return stoppedCh, err
 }
 
+// apiserver 的配置
 // ServeWithListenerStopped runs the secure http server. It fails only if certificates cannot be loaded or the initial listen call fails.
 // The actual server loop (stoppable by closing stopCh) runs in a go routine, i.e. ServeWithListenerStopped does not block.
 // It returns a stoppedCh that is closed when all non-hijacked active requests have been processed.

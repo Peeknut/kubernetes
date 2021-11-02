@@ -83,19 +83,24 @@ type Config struct {
 	// ClientCAContentProvider are the options for verifying incoming connections using mTLS and directly assigning to users.
 	// Generally this is the CA bundle file used to authenticate client certificates
 	// If this value is nil, then mutual TLS is disabled.
-	ClientCAContentProvider dynamiccertificates.CAContentProvider
+	ClientCAContentProvider dynamiccertificates.CAContentProvider  // ca 证书的内容。由于 apiserver 启动的时候会传入参数，所以是 s.ClientCA：--client-ca-file=/etc/kubernetes/pki/ca.crt 中的内容。
 
 	// Optional field, custom dial function used to connect to webhook
 	CustomDial utilnet.DialFunc
 }
 
+// 根据配置决定9种认证器的初始化
 // New returns an authenticator.Request or an error that supports the standard
 // Kubernetes authentication mechanisms.
 func (config Config) New() (authenticator.Request, *spec.SecurityDefinitions, error) {
+	// 定义认证器列表
 	var authenticators []authenticator.Request
 	var tokenAuthenticators []authenticator.Token
 	securityDefinitions := spec.SecurityDefinitions{}
 
+	// 下面根据不同的开关，决定是否配置某种认证器
+
+	// RequestHeader认证器
 	// front-proxy, BasicAuth methods, local first, then remote
 	// Add the front proxy authenticator if requested
 	if config.RequestHeaderConfig != nil {
@@ -115,6 +120,7 @@ func (config Config) New() (authenticator.Request, *spec.SecurityDefinitions, er
 		authenticators = append(authenticators, certAuth)
 	}
 
+	// TokenAuth认证器
 	// Bearer token methods, local first, then remote
 	if len(config.TokenAuthFile) > 0 {
 		tokenAuth, err := newAuthenticatorFromTokenFile(config.TokenAuthFile)
@@ -123,20 +129,22 @@ func (config Config) New() (authenticator.Request, *spec.SecurityDefinitions, er
 		}
 		tokenAuthenticators = append(tokenAuthenticators, authenticator.WrapAudienceAgnosticToken(config.APIAudiences, tokenAuth))
 	}
-	if len(config.ServiceAccountKeyFiles) > 0 {
+	// ServiceAccountAuth认证器
+	if len(config.ServiceAccountKeyFiles) > 0 {  // apiserver 启动的时候，会传入参数：s.Authentication.ServiceAccounts.KeyFiles：--service-account-key-file=/etc/kubernetes/pki/sa.pub
 		serviceAccountAuth, err := newLegacyServiceAccountAuthenticator(config.ServiceAccountKeyFiles, config.ServiceAccountLookup, config.APIAudiences, config.ServiceAccountTokenGetter)
 		if err != nil {
 			return nil, nil, err
 		}
 		tokenAuthenticators = append(tokenAuthenticators, serviceAccountAuth)
 	}
-	if len(config.ServiceAccountIssuers) > 0 {
+	if len(config.ServiceAccountIssuers) > 0 {  // 默认这里为空
 		serviceAccountAuth, err := newServiceAccountAuthenticator(config.ServiceAccountIssuers, config.ServiceAccountKeyFiles, config.APIAudiences, config.ServiceAccountTokenGetter)
 		if err != nil {
 			return nil, nil, err
 		}
 		tokenAuthenticators = append(tokenAuthenticators, serviceAccountAuth)
 	}
+	// BootstrapToken认证器
 	if config.BootstrapToken {
 		if config.BootstrapTokenAuthenticator != nil {
 			// TODO: This can sometimes be nil because of
@@ -176,6 +184,7 @@ func (config Config) New() (authenticator.Request, *spec.SecurityDefinitions, er
 		}
 		tokenAuthenticators = append(tokenAuthenticators, authenticator.WrapAudienceAgnosticToken(config.APIAudiences, oidcAuth))
 	}
+	// WebhookTokenAuth认证器
 	if len(config.WebhookTokenAuthnConfigFile) > 0 {
 		webhookTokenAuth, err := newWebhookTokenAuthenticator(config)
 		if err != nil {
@@ -203,6 +212,7 @@ func (config Config) New() (authenticator.Request, *spec.SecurityDefinitions, er
 		}
 	}
 
+	// 匿名认证器
 	if len(authenticators) == 0 {
 		if config.Anonymous {
 			return anonymous.NewAuthenticator(), &securityDefinitions, nil
@@ -210,6 +220,7 @@ func (config Config) New() (authenticator.Request, *spec.SecurityDefinitions, er
 		return nil, &securityDefinitions, nil
 	}
 
+	// 将多个认证器合并
 	authenticator := union.New(authenticators...)
 
 	authenticator = group.NewAuthenticatedGroupAdder(authenticator)
@@ -267,6 +278,7 @@ func newAuthenticatorFromOIDCIssuerURL(opts oidc.Options) (authenticator.Token, 
 // newLegacyServiceAccountAuthenticator returns an authenticator.Token or an error
 func newLegacyServiceAccountAuthenticator(keyfiles []string, lookup bool, apiAudiences authenticator.Audiences, serviceAccountGetter serviceaccount.ServiceAccountTokenGetter) (authenticator.Token, error) {
 	allPublicKeys := []interface{}{}
+	// 获取所有的 pubkey
 	for _, keyfile := range keyfiles {
 		publicKeys, err := keyutil.PublicKeysFromFile(keyfile)
 		if err != nil {

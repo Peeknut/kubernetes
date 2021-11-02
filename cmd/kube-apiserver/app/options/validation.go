@@ -170,7 +170,7 @@ func (s *ServerRunOptions) Validate() []error {
 	errs = append(errs, validateServiceNodePort(s)...)
 	errs = append(errs, validateAPIPriorityAndFairness(s)...)
 	errs = append(errs, s.SecureServing.Validate()...)
-	errs = append(errs, s.Authentication.Validate()...)
+	errs = append(errs, s.Authentication.Validate()...)  // 认证参数的检查
 	errs = append(errs, s.Authorization.Validate()...)
 	errs = append(errs, s.Audit.Validate()...)
 	errs = append(errs, s.Admission.Validate()...)

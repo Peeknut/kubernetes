@@ -50,6 +50,7 @@ func (m *BaseControllerRefManager) CanAdopt() error {
 	return m.canAdoptErr
 }
 
+// ClaimObject 本质上就是将cr label 与ds selector 进行匹配
 // ClaimObject tries to take ownership of an object for this controller.
 //
 // It will reconcile the following:
@@ -97,6 +98,7 @@ func (m *BaseControllerRefManager) ClaimObject(obj metav1.Object, match func(met
 		return false, nil
 	}
 
+	// 如果 controller 对象（比如 daemonset）即将删除 or cr资源label不匹配 or cr资源即将删除
 	// It's an orphan.
 	if m.Controller.GetDeletionTimestamp() != nil || !match(obj) {
 		// Ignore if we're being deleted or selector doesn't match.
@@ -377,10 +379,12 @@ func (m *ReplicaSetControllerRefManager) ReleaseReplicaSet(replicaSet *apps.Repl
 	return err
 }
 
+
 // RecheckDeletionTimestamp returns a CanAdopt() function to recheck deletion.
 //
 // The CanAdopt() function calls getObject() to fetch the latest value,
 // and denies adoption attempts if that object has a non-nil DeletionTimestamp.
+// 判断 object 的 deletetimestamp 是否为空
 func RecheckDeletionTimestamp(getObject func() (metav1.Object, error)) func() error {
 	return func() error {
 		obj, err := getObject()
@@ -418,7 +422,7 @@ type ControllerRevisionControllerRefManager struct {
 //       makes sense to check canAdopt() again (e.g. in a different sync pass).
 func NewControllerRevisionControllerRefManager(
 	crControl ControllerRevisionControlInterface,
-	controller metav1.Object,
+	controller metav1.Object,  // 可以是某个具体的 daemonset
 	selector labels.Selector,
 	controllerKind schema.GroupVersionKind,
 	canAdopt func() error,
@@ -452,15 +456,16 @@ func (m *ControllerRevisionControllerRefManager) ClaimControllerRevisions(histor
 	var errlist []error
 
 	match := func(obj metav1.Object) bool {
-		return m.Selector.Matches(labels.Set(obj.GetLabels()))
+		return m.Selector.Matches(labels.Set(obj.GetLabels()))  // ControllerRevisionControllerRefManager 的 seletcor 与 obj 的 label 匹配
 	}
 	adopt := func(obj metav1.Object) error {
-		return m.AdoptControllerRevision(obj.(*apps.ControllerRevision))
+		return m.AdoptControllerRevision(obj.(*apps.ControllerRevision))  // m（指向的 daemonset）接管 cr 资源
 	}
 	release := func(obj metav1.Object) error {
 		return m.ReleaseControllerRevision(obj.(*apps.ControllerRevision))
 	}
 
+	// 遍历所有的 cr 资源
 	for _, h := range histories {
 		ok, err := m.ClaimObject(h, match, adopt, release)
 		if err != nil {
@@ -468,12 +473,13 @@ func (m *ControllerRevisionControllerRefManager) ClaimControllerRevisions(histor
 			continue
 		}
 		if ok {
-			claimed = append(claimed, h)
+			claimed = append(claimed, h)  // 返回所有属于 m（中的 controller 资源，可以是某个daemonset资源）的 cr 资源
 		}
 	}
 	return claimed, utilerrors.NewAggregate(errlist)
 }
 
+// AdoptControllerRevision 发送 patch 以接管 controllerrevision。即将 deamonset 接管某个 cr 资源
 // AdoptControllerRevision sends a patch to take control of the ControllerRevision. It returns the error if
 // the patching fails.
 func (m *ControllerRevisionControllerRefManager) AdoptControllerRevision(history *apps.ControllerRevision) error {
@@ -489,6 +495,7 @@ func (m *ControllerRevisionControllerRefManager) AdoptControllerRevision(history
 	return m.crControl.PatchControllerRevision(history.Namespace, history.Name, patchBytes)
 }
 
+// ReleaseControllerRevision 将某个 cr 资源脱离 ControllerRevisionControllerRefManager 的管控
 // ReleaseControllerRevision sends a patch to free the ControllerRevision from the control of its controller.
 // It returns the error if the patching fails. 404 and 422 errors are ignored.
 func (m *ControllerRevisionControllerRefManager) ReleaseControllerRevision(history *apps.ControllerRevision) error {
@@ -556,6 +563,7 @@ type objectMetaForPatch struct {
 	Finalizers      []string                `json:"finalizers,omitempty"`
 }
 
+// controller 为具体的某个资源，即 daemonset
 func ownerRefControllerPatch(controller metav1.Object, controllerKind schema.GroupVersionKind, uid types.UID, finalizers ...string) ([]byte, error) {
 	blockOwnerDeletion := true
 	isController := true

@@ -114,6 +114,7 @@ type Controller struct {
 // NewController creates a new Job controller that keeps the relevant pods
 // in sync with their corresponding Job objects.
 func NewController(podInformer coreinformers.PodInformer, jobInformer batchinformers.JobInformer, kubeClient clientset.Interface) *Controller {
+	// 1）构造 Job controller
 	eventBroadcaster := record.NewBroadcaster()
 	eventBroadcaster.StartStructuredLogging(0)
 	eventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{Interface: kubeClient.CoreV1().Events("")})
@@ -134,6 +135,7 @@ func NewController(podInformer coreinformers.PodInformer, jobInformer batchinfor
 		recorder:     eventBroadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: "job-controller"}),
 	}
 
+	// 2）注册 jobInfomer 的 add/del/update event handler
 	jobInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj interface{}) {
 			jm.enqueueController(obj, true)
@@ -146,6 +148,7 @@ func NewController(podInformer coreinformers.PodInformer, jobInformer batchinfor
 	jm.jobLister = jobInformer.Lister()
 	jm.jobStoreSynced = jobInformer.Informer().HasSynced
 
+	// 3）注册 podInformer 的 add/del/update event handler
 	podInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc:    jm.addPod,
 		UpdateFunc: jm.updatePod,
@@ -154,6 +157,8 @@ func NewController(podInformer coreinformers.PodInformer, jobInformer batchinfor
 	jm.podStore = podInformer.Lister()
 	jm.podStoreSynced = podInformer.Informer().HasSynced
 
+	// 4）注册 updateHandler 为 updateStatus，用来更新 Job 状态；
+	// 	 注册 syncHandler 为 syncJob，用来进行处理 queue 中的 Job
 	jm.updateStatusHandler = jm.updateJobStatus
 	jm.patchJobHandler = jm.patchJob
 	jm.syncHandler = jm.syncJob
@@ -172,10 +177,12 @@ func (jm *Controller) Run(workers int, stopCh <-chan struct{}) {
 	klog.Infof("Starting job controller")
 	defer klog.Infof("Shutting down job controller")
 
+	// 等待 jobController cache 同步
 	if !cache.WaitForNamedCacheSync("job", stopCh, jm.podStoreSynced, jm.jobStoreSynced) {
 		return
 	}
 
+	// 启动5个goruntine，每个协程分别执行worker，每个worker执行完后等待1s，继续执行，如此循环；
 	for i := 0; i < workers; i++ {
 		go wait.Until(jm.worker, time.Second, stopCh)
 	}
@@ -423,6 +430,8 @@ func (jm *Controller) worker() {
 	}
 }
 
+// worker负责从从queue中get job key，对每个job，调用syncJob进行同步，
+// 如果syncJob成功，则forget the job（其实就是让rate limiter 停止tracking it），否则将该key再次加入到queue中，等待下次sync。
 func (jm *Controller) processNextWorkItem() bool {
 	key, quit := jm.queue.Get()
 	if quit {
@@ -557,6 +566,7 @@ func (jm *Controller) syncJob(key string) (forget bool, rErr error) {
 		klog.V(4).Infof("Finished syncing job %q (%v)", key, time.Since(startTime))
 	}()
 
+	// 从Indexer中查找指定的Job是否存在，如果不存在，则从expectations中删除该job，流程结束返回true。否则继续下面流程
 	ns, name, err := cache.SplitMetaNamespaceKey(key)
 	if err != nil {
 		return false, err
@@ -568,7 +578,7 @@ func (jm *Controller) syncJob(key string) (forget bool, rErr error) {
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			klog.V(4).Infof("Job has been deleted: %v", key)
-			jm.expectations.DeleteExpectations(key)
+			jm.expectations.DeleteExpectations(key)  // ？
 			return true, nil
 		}
 		return false, err
@@ -576,11 +586,13 @@ func (jm *Controller) syncJob(key string) (forget bool, rErr error) {
 	// make a copy so we don't mutate the shared cache
 	job := *sharedJob.DeepCopy()
 
+	// 根据JobCondition Complete or Failed判断Job是否Finished，如果Finished，则流程结束返回true，否则继续下面流程。
 	// if job was finished previously, we don't want to redo the termination
 	if IsJobFinished(&job) {
 		return true, nil
-	}
+	}  // Q：这里 job 中的 status 是什么时候更新的？
 
+	// Q：
 	// Cannot create Pods if this is an Indexed Job and the feature is disabled.
 	if !feature.DefaultFeatureGate.Enabled(features.IndexedJob) && isIndexedJob(&job) {
 		jm.recorder.Event(&job, v1.EventTypeWarning, "IndexedJobDisabled", "Skipped Indexed Job sync because feature is disabled.")
@@ -620,6 +632,8 @@ func (jm *Controller) syncJob(key string) (forget bool, rErr error) {
 		}
 	}
 
+	// 调用SatisfiedExpectations，如果ControlleeExpectations中待add和del都<=0，或者expectations已经超过5分钟没更新过了，
+	// 则返回jobNeedsSync=true，表示需要进行一次manageJob了
 	// Check the expectations of the job before counting active pods, otherwise a new pod can sneak in
 	// and update the expectations after we've retrieved active pods from the store. If a new pod enters
 	// the store after we've checked the expectation, the job sync is just deferred till the next relist.
@@ -633,6 +647,8 @@ func (jm *Controller) syncJob(key string) (forget bool, rErr error) {
 	activePods := controller.FilterActivePods(pods)
 	active := int32(len(activePods))
 	succeeded, failed := getStatus(&job, pods, uncounted)
+	// 对于那些第一次启动的jobs (StartTime==nil), 需要把设置StartTime，并且如果ActiveDeadlineSeconds不为空，
+	// 则经过ActiveDeadlineSeconds后再次把该job加入到queue中进行sync
 	// Job first start. Set StartTime and start the ActiveDeadlineSeconds timer
 	// only if the job is not in the suspended state.
 	if job.Status.StartTime == nil && !jobSuspended(&job) {

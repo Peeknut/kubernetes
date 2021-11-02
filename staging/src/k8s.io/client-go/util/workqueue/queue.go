@@ -26,10 +26,10 @@ import (
 type Interface interface {
 	Add(item interface{})
 	Len() int
-	Get() (item interface{}, shutdown bool)
-	Done(item interface{})
-	ShutDown()
-	ShuttingDown() bool
+	Get() (item interface{}, shutdown bool)  // 获取队列头部的元素，第二个返回值表示队列是否已经关闭
+	Done(item interface{})  // 标记队列中元素已经处理完
+	ShutDown()// 关闭队列
+	ShuttingDown() bool  // 查询队列是否正在关闭
 }
 
 // New constructs a new work queue (see the package comment).

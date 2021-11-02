@@ -130,6 +130,7 @@ func (obj *TypeMeta) GroupVersionKind() schema.GroupVersionKind {
 
 func (obj *ListMeta) GetListMeta() ListInterface { return obj }
 
+// GetObjectMeta是MetaAccessor的接口函数，这个函数说明了ObjectMeta实现了MetaAccessor。
 func (obj *ObjectMeta) GetObjectMeta() Object { return obj }
 
 // Namespace implements metav1.Object for any object with an ObjectMeta typed field. Allows

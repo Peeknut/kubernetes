@@ -550,6 +550,7 @@ func (c *RecommendedConfig) Complete() CompletedConfig {
 	return c.Config.Complete(c.SharedInformerFactory)
 }
 
+// 返回server，3种server在初始化时首先都会调用这个函数来初始化一个 genericServer，然后进行 API 的注册
 // New creates a new server which logically combines the handling chain with the passed server.
 // name is used to differentiate for logging. The handler chain in particular can be difficult as it starts delegating.
 // delegationTarget may not be nil.
@@ -567,13 +568,16 @@ func (c completedConfig) New(name string, delegationTarget DelegationTarget) (*G
 	handlerChainBuilder := func(handler http.Handler) http.Handler {
 		return c.BuildHandlerChainFunc(handler, c.Config)
 	}
+	//初始化 handler，APIServerHandler 包含了 API Server 使用的多种http.Handler 类型，包括 go-restful 以及 non-go-restful，
+	//以及在以上两者之间选择的 Director 对象，go-restful 用于处理已经注册的 handler，non-go-restful 用来处理不存在的 handler，
+	//API URI 处理的选择过程为：FullHandlerChain-> Director ->{GoRestfulContainer， NonGoRestfulMux}。
 	apiServerHandler := NewAPIServerHandler(name, c.Serializer, handlerChainBuilder, delegationTarget.UnprotectedHandler())
 
 	s := &GenericAPIServer{
 		discoveryAddresses:         c.DiscoveryAddresses,
 		LoopbackClientConfig:       c.LoopbackClientConfig,
 		legacyAPIGroupPrefixes:     c.LegacyAPIGroupPrefixes,
-		admissionControl:           c.AdmissionControl,
+		admissionControl:           c.AdmissionControl,  // 准入的 handlers
 		Serializer:                 c.Serializer,
 		AuditBackend:               c.AuditBackend,
 		Authorizer:                 c.Authorization.Authorizer,
@@ -720,6 +724,7 @@ func (c completedConfig) New(name string, delegationTarget DelegationTarget) (*G
 
 	s.listedPathProvider = routes.ListedPathProviders{s.listedPathProvider, delegationTarget}
 
+	// 调用 installAPI来添加包括 /、/debug/*、/metrics、/version 等路由信息
 	installAPI(s, c.Config)
 
 	// use the UnprotectedHandler from the delegation target to ensure that we don't attempt to double authenticator, authorize,
@@ -740,9 +745,10 @@ func BuildHandlerChainWithStorageVersionPrecondition(apiHandler http.Handler, c 
 	return DefaultBuildHandlerChain(handler, c)
 }
 
+// 这个函数创建的是什么链：认证、授权
 func DefaultBuildHandlerChain(apiHandler http.Handler, c *Config) http.Handler {
 	handler := filterlatency.TrackCompleted(apiHandler)
-	handler = genericapifilters.WithAuthorization(handler, c.Authorization.Authorizer, c.Serializer)
+	handler = genericapifilters.WithAuthorization(handler, c.Authorization.Authorizer, c.Serializer)  // 授权
 	handler = filterlatency.TrackStarted(handler, "authorization")
 
 	if c.FlowControl != nil {
@@ -766,7 +772,7 @@ func DefaultBuildHandlerChain(apiHandler http.Handler, c *Config) http.Handler {
 
 	failedHandler = filterlatency.TrackCompleted(failedHandler)
 	handler = filterlatency.TrackCompleted(handler)
-	handler = genericapifilters.WithAuthentication(handler, c.Authentication.Authenticator, failedHandler, c.Authentication.APIAudiences)
+	handler = genericapifilters.WithAuthentication(handler, c.Authentication.Authenticator, failedHandler, c.Authentication.APIAudiences)  // 认证
 	handler = filterlatency.TrackStarted(handler, "authentication")
 
 	handler = genericfilters.WithCORS(handler, c.CorsAllowedOriginList, nil, nil, nil, "true")
@@ -877,9 +883,9 @@ func AuthorizeClientBearerToken(loopback *restclient.Config, authn *Authenticati
 	var uid = uuid.New().String()
 	tokens := make(map[string]*user.DefaultInfo)
 	tokens[privilegedLoopbackToken] = &user.DefaultInfo{
-		Name:   user.APIServerUser,
+		Name:   user.APIServerUser,  // "system:apiserver"
 		UID:    uid,
-		Groups: []string{user.SystemPrivilegedGroup},
+		Groups: []string{user.SystemPrivilegedGroup},  // "system:masters"
 	}
 
 	tokenAuthenticator := authenticatorfactory.NewFromTokens(tokens, authn.APIAudiences)

@@ -476,6 +476,8 @@ func DefaultKubernetesUserAgent() string {
 		adjustCommit(version.Get().GitCommit))
 }
 
+// 原来这是 pod 默认的连接 apiserver 的连接方式！！！！！
+// yurthub 中的 remoteproxy 中的 transport 字段的更改应该也是从这里来的吧！！！！
 // InClusterConfig returns a config object which uses the service account
 // kubernetes gives to pods. It's intended for clients that expect to be
 // running inside a pod running on kubernetes. It will return ErrNotInCluster
@@ -505,7 +507,7 @@ func InClusterConfig() (*Config, error) {
 
 	return &Config{
 		// TODO: switch to using cluster DNS.
-		Host:            "https://" + net.JoinHostPort(host, port),
+		Host:            "https://" + net.JoinHostPort(host, port),  // apisevrer 的地址
 		TLSClientConfig: tlsClientConfig,
 		BearerToken:     string(token),
 		BearerTokenFile: tokenFile,

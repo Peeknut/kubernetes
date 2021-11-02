@@ -35,12 +35,14 @@ func (o *SecureServingOptions) WithLoopback() *SecureServingOptionsWithLoopback 
 	return &SecureServingOptionsWithLoopback{o}
 }
 
+// 生成 loopbackClientConfig
 // ApplyTo fills up serving information in the server configuration.
 func (s *SecureServingOptionsWithLoopback) ApplyTo(secureServingInfo **server.SecureServingInfo, loopbackClientConfig **rest.Config) error {
 	if s == nil || s.SecureServingOptions == nil || secureServingInfo == nil {
 		return nil
 	}
 
+	// 这里根据 s 的配置生成了 secureServingInfo（config）中的 cert（包括了 server 的 tls 配置） 和 SNICerts 字段
 	if err := s.SecureServingOptions.ApplyTo(secureServingInfo); err != nil {
 		return err
 	}
@@ -49,12 +51,21 @@ func (s *SecureServingOptionsWithLoopback) ApplyTo(secureServingInfo **server.Se
 		return nil
 	}
 
+	// 因为生成自签证书的时候，会生成 ca.key、ca.crt、server.key、server.crt。
+	// 其中 crt 会使用 key 中的公钥进行生成。返回的 certPem 中会包含 ca.crt、server.crt。这里的 ca.crt 和目录 /etc/kubernetes/pki 中的 ca.crt 不同
+	// 在 secureServingInfo（config）中的 SNICerts 字段中添加 自签证书的情况
+	//本地回环地址访问apiserver的安全端口，需要生成自签名证书和秘钥（存储在apiserver中，这里是单向tls，即client请求server的安全端口）。本地回环地址访问的host域名是"apiserver-loopback-client"，
+	//该域名及对应的自签名证书和秘钥最终存入secureServingInfo的SNICerts中。即本地回环地址访问apiserver的host（"apiserver-loopback-client"），
+	//apiserver是通过SNICerts找到host对应的证书和秘钥返回给本地客户端。
+	// https://github.com/yangyumo123/kubernetes-source-analysis/blob/master/kube-apiserver/run/createKubeAPIServerConfig.md
 	// create self-signed cert+key with the fake server.LoopbackClientServerNameOverride and
 	// let the server return it when the loopback client connects.
 	certPem, keyPem, err := certutil.GenerateSelfSignedCertKey(server.LoopbackClientServerNameOverride, nil, nil)
 	if err != nil {
 		return fmt.Errorf("failed to generate self-signed certificate for loopback connection: %v", err)
 	}
+	// certPem 中会包含 ca.crt（自签的）、server.crt
+	// keyPem 只包含了 server.key
 	certProvider, err := dynamiccertificates.NewStaticSNICertKeyContent("self-signed loopback", certPem, keyPem, server.LoopbackClientServerNameOverride)
 	if err != nil {
 		return fmt.Errorf("failed to generate self-signed certificate for loopback connection: %v", err)

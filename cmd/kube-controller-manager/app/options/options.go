@@ -234,7 +234,7 @@ func addDummyInsecureFlags(fs *pflag.FlagSet) {
 // Flags returns flags for a specific APIServer by section name
 func (s *KubeControllerManagerOptions) Flags(allControllers []string, disabledByDefaultControllers []string) cliflag.NamedFlagSets {
 	fss := cliflag.NamedFlagSets{}
-	s.Generic.AddFlags(&fss, allControllers, disabledByDefaultControllers)
+	s.Generic.AddFlags(&fss, allControllers, disabledByDefaultControllers)  // 添加 kube-controller-manager 部分参数，包括了参数 --controllers
 	s.KubeCloudShared.AddFlags(fss.FlagSet("generic"))
 	s.ServiceController.AddFlags(fss.FlagSet("service controller"))
 
@@ -279,6 +279,7 @@ func (s *KubeControllerManagerOptions) Flags(allControllers []string, disabledBy
 
 // ApplyTo fills up controller manager config with options.
 func (s *KubeControllerManagerOptions) ApplyTo(c *kubecontrollerconfig.Config) error {
+	// 只是简单的将输入参数--controllers 的内容赋值给 c 的相关字段，并不进行真正的处理
 	if err := s.Generic.ApplyTo(&c.ComponentConfig.Generic); err != nil {
 		return err
 	}
@@ -375,7 +376,7 @@ func (s *KubeControllerManagerOptions) ApplyTo(c *kubecontrollerconfig.Config) e
 func (s *KubeControllerManagerOptions) Validate(allControllers []string, disabledByDefaultControllers []string) error {
 	var errs []error
 
-	errs = append(errs, s.Generic.Validate(allControllers, disabledByDefaultControllers)...)
+	errs = append(errs, s.Generic.Validate(allControllers, disabledByDefaultControllers)...)    // 这里进去可以看到怎么处理参数 --controllers 的，只是验证关闭的controollers是否存在，并不会剔除
 	errs = append(errs, s.KubeCloudShared.Validate()...)
 	errs = append(errs, s.AttachDetachController.Validate()...)
 	errs = append(errs, s.CSRSigningController.Validate()...)
@@ -414,6 +415,7 @@ func (s *KubeControllerManagerOptions) Validate(allControllers []string, disable
 
 // Config return a controller manager config objective
 func (s KubeControllerManagerOptions) Config(allControllers []string, disabledByDefaultControllers []string) (*kubecontrollerconfig.Config, error) {
+	// 这里进去可以看到怎么处理参数 --controllers 的
 	if err := s.Validate(allControllers, disabledByDefaultControllers); err != nil {
 		return nil, err
 	}
@@ -444,6 +446,7 @@ func (s KubeControllerManagerOptions) Config(allControllers []string, disabledBy
 		Kubeconfig:    kubeconfig,
 		EventRecorder: eventRecorder,
 	}
+	// 只是简单的将输入参数--controllers 的内容赋值给 c 的相关字段，并不进行真正的处理
 	if err := s.ApplyTo(c); err != nil {
 		return nil, err
 	}

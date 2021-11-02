@@ -185,10 +185,10 @@ func (r *ControllerExpectations) DeleteExpectations(controllerKey string) {
 // manager.
 func (r *ControllerExpectations) SatisfiedExpectations(controllerKey string) bool {
 	if exp, exists, err := r.GetExpectations(controllerKey); exists {
-		if exp.Fulfilled() {
+		if exp.Fulfilled() {  // 已经完成
 			klog.V(4).Infof("Controller expectations fulfilled %#v", exp)
 			return true
-		} else if exp.isExpired() {
+		} else if exp.isExpired() {  // 已经过期
 			klog.V(4).Infof("Controller expectations expired %#v", exp)
 			return true
 		} else {

@@ -90,6 +90,8 @@ func NewCSV(path string) (*TokenAuthenticator, error) {
 	}, nil
 }
 
+// 内置认证器2：TokenAuth
+// 当 API 服务器的命令行设置了 --token-auth-file=SOMEFILE 选项时，会从文件中 读取持有者令牌。
 func (a *TokenAuthenticator) AuthenticateToken(ctx context.Context, value string) (*authenticator.Response, bool, error) {
 	user, ok := a.tokens[value]
 	if !ok {

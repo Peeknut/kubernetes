@@ -84,6 +84,7 @@ func GenerateSelfSignedCertKey(host string, alternateIPs []net.IP, alternateDNS 
 	return GenerateSelfSignedCertKeyWithFixtures(host, alternateIPs, alternateDNS, "")
 }
 
+// 为给定 host，创建 证书 + key
 // GenerateSelfSignedCertKeyWithFixtures creates a self-signed certificate and key for the given host.
 // Host may be an IP or a DNS name. You may also specify additional subject alt names (either ip or dns names)
 // for the certificate.
@@ -99,7 +100,7 @@ func GenerateSelfSignedCertKeyWithFixtures(host string, alternateIPs []net.IP, a
 	baseName := fmt.Sprintf("%s_%s_%s", host, strings.Join(ipsToStrings(alternateIPs), "-"), strings.Join(alternateDNS, "-"))
 	certFixturePath := filepath.Join(fixtureDirectory, baseName+".crt")
 	keyFixturePath := filepath.Join(fixtureDirectory, baseName+".key")
-	if len(fixtureDirectory) > 0 {
+	if len(fixtureDirectory) > 0 {  // 创建 loopbackClientConfig 时，为空
 		cert, err := ioutil.ReadFile(certFixturePath)
 		if err == nil {
 			key, err := ioutil.ReadFile(keyFixturePath)
@@ -111,6 +112,7 @@ func GenerateSelfSignedCertKeyWithFixtures(host string, alternateIPs []net.IP, a
 		maxAge = 100 * time.Hour * 24 * 365 // 100 years fixtures
 	}
 
+	// 生成 ca.key(包含了ca.pub)
 	caKey, err := rsa.GenerateKey(cryptorand.Reader, 2048)
 	if err != nil {
 		return nil, nil, err
@@ -119,14 +121,14 @@ func GenerateSelfSignedCertKeyWithFixtures(host string, alternateIPs []net.IP, a
 	caTemplate := x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject: pkix.Name{
-			CommonName: fmt.Sprintf("%s-ca@%d", host, time.Now().Unix()),
+			CommonName: fmt.Sprintf("%s-ca@%d", host, time.Now().Unix()),  // 因为是自签证书，所以自己作为ca。ca中的CN为本机host
 		},
 		NotBefore: validFrom,
 		NotAfter:  validFrom.Add(maxAge),
 
-		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,  // ca 证书的用途
 		BasicConstraintsValid: true,
-		IsCA:                  true,
+		IsCA:                  true,  // 是否为 ca
 	}
 
 	caDERBytes, err := x509.CreateCertificate(cryptorand.Reader, &caTemplate, &caTemplate, &caKey.PublicKey, caKey)
@@ -134,11 +136,13 @@ func GenerateSelfSignedCertKeyWithFixtures(host string, alternateIPs []net.IP, a
 		return nil, nil, err
 	}
 
+	// 生成 ca.crt
 	caCertificate, err := x509.ParseCertificate(caDERBytes)
 	if err != nil {
 		return nil, nil, err
 	}
 
+	// 生成 server.key（作为服务端使用的 key）
 	priv, err := rsa.GenerateKey(cryptorand.Reader, 2048)
 	if err != nil {
 		return nil, nil, err
@@ -153,7 +157,7 @@ func GenerateSelfSignedCertKeyWithFixtures(host string, alternateIPs []net.IP, a
 		NotAfter:  validFrom.Add(maxAge),
 
 		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},  // 作为服务端，该证书认证
 		BasicConstraintsValid: true,
 	}
 
@@ -166,11 +170,15 @@ func GenerateSelfSignedCertKeyWithFixtures(host string, alternateIPs []net.IP, a
 	template.IPAddresses = append(template.IPAddresses, alternateIPs...)
 	template.DNSNames = append(template.DNSNames, alternateDNS...)
 
+	// 生成 server.crt
+	// 需要 ca.key, ca.crt, server.pub
 	derBytes, err := x509.CreateCertificate(cryptorand.Reader, &template, caCertificate, &priv.PublicKey, caKey)
 	if err != nil {
 		return nil, nil, err
 	}
 
+	// 将 ca.crt + server.crt 放在一起
+	// 为什么要这样？同一个字段不会被覆盖掉吗？
 	// Generate cert, followed by ca
 	certBuffer := bytes.Buffer{}
 	if err := pem.Encode(&certBuffer, &pem.Block{Type: CertificateBlockType, Bytes: derBytes}); err != nil {
@@ -180,13 +188,14 @@ func GenerateSelfSignedCertKeyWithFixtures(host string, alternateIPs []net.IP, a
 		return nil, nil, err
 	}
 
+	// 只有 server.key
 	// Generate key
 	keyBuffer := bytes.Buffer{}
 	if err := pem.Encode(&keyBuffer, &pem.Block{Type: keyutil.RSAPrivateKeyBlockType, Bytes: x509.MarshalPKCS1PrivateKey(priv)}); err != nil {
 		return nil, nil, err
 	}
 
-	if len(fixtureDirectory) > 0 {
+	if len(fixtureDirectory) > 0 {  // 创建 loopbackClientConfig 时，为空
 		if err := ioutil.WriteFile(certFixturePath, certBuffer.Bytes(), 0644); err != nil {
 			return nil, nil, fmt.Errorf("failed to write cert fixture to %s: %v", certFixturePath, err)
 		}

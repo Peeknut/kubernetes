@@ -49,6 +49,7 @@ type SecureServingOptions struct {
 	// is set to BindAddress if the later no loopback, or to the first host interface address.
 	ExternalAddress net.IP
 
+	// 如果 listener 设置了，那么就直接使用它，忽略 BindAddress/BindPort/BindNetwork.
 	// Listener is the secure server network listener.
 	// either Listener or BindAddress/BindPort/BindNetwork is set,
 	// if Listener is set, use it and omit BindAddress/BindPort/BindNetwork.
@@ -56,6 +57,7 @@ type SecureServingOptions struct {
 
 	// ServerCert is the TLS cert info for serving secure traffic
 	ServerCert GeneratableKeyCert
+	// SNICertKeys 被命名为 CertKeys，用于在 SNI 支持下提供安全流量。
 	// SNICertKeys are named CertKeys for serving secure traffic with SNI support.
 	SNICertKeys []cliflag.NamedCertKey
 	// CipherSuites is the list of allowed cipher suites for the server.
@@ -144,34 +146,43 @@ func (s *SecureServingOptions) Validate() []error {
 	return errors
 }
 
+// used
 func (s *SecureServingOptions) AddFlags(fs *pflag.FlagSet) {
 	if s == nil {
 		return
 	}
 
+	// 默认值是 0.0.0.0——在 pkg/kubeapiserver/options/serving.go 中设置
 	fs.IPVar(&s.BindAddress, "bind-address", s.BindAddress, ""+
 		"The IP address on which to listen for the --secure-port port. The "+
 		"associated interface(s) must be reachable by the rest of the cluster, and by CLI/web "+
 		"clients. If blank or an unspecified address (0.0.0.0 or ::), all interfaces will be used.")
 
 	desc := "The port on which to serve HTTPS with authentication and authorization."
+	// 默认值是 Required = true
 	if s.Required {
 		desc += " It cannot be switched off with 0."
 	} else {
 		desc += " If 0, don't serve HTTPS at all."
 	}
+	// 启动的时候设置了 --secure-port=6443。默认值也是 6443
 	fs.IntVar(&s.BindPort, "secure-port", s.BindPort, desc)
 
+	// 存放 apiserver 证书和 key 的位置。默认值是 /var/run/kubernetes
+	// 如果参数 --tls-cert-file and --tls-private-key-file 提供，那么这个参数没有作用
 	fs.StringVar(&s.ServerCert.CertDirectory, "cert-dir", s.ServerCert.CertDirectory, ""+
 		"The directory where the TLS certs are located. "+
 		"If --tls-cert-file and --tls-private-key-file are provided, this flag will be ignored.")
 
+	// 启动的时候设置了 --tls-cert-file=/etc/kubernetes/pki/apiserver.crt
+	// apiserver 的 https 服务证书和私钥。如果开启了 https 但是没有设置这个参数，那么会生成自签的证书和key（保存在 --cert-dir——默认值为/var/run/kubernetes）并使用
 	fs.StringVar(&s.ServerCert.CertKey.CertFile, "tls-cert-file", s.ServerCert.CertKey.CertFile, ""+
 		"File containing the default x509 Certificate for HTTPS. (CA cert, if any, concatenated "+
 		"after server cert). If HTTPS serving is enabled, and --tls-cert-file and "+
 		"--tls-private-key-file are not provided, a self-signed certificate and key "+
 		"are generated for the public address and saved to the directory specified by --cert-dir.")
 
+	// 启动的时候设置了 --tls-private-key-file=/etc/kubernetes/pki/apiserver.key
 	fs.StringVar(&s.ServerCert.CertKey.KeyFile, "tls-private-key-file", s.ServerCert.CertKey.KeyFile,
 		"File containing the default x509 private key matching --tls-cert-file.")
 
@@ -214,32 +225,44 @@ func (s *SecureServingOptions) AddFlags(fs *pflag.FlagSet) {
 			"for the kernel to release sockets in TIME_WAIT state. [default=false]")
 }
 
+// bind-address：0.0.0.0
+// Required = true
+// --secure-port=6443
+// cert-dir= /var/run/kubernetes
+// --tls-cert-file=/etc/kubernetes/pki/apiserver.crt
+// --tls-private-key-file=/etc/kubernetes/pki/apiserver.key
+
+// 生成了 secureServingInfo（config）中的 Cert 和 SNICerts 字段，
+// Cert 的生成是根据传入参数 --tls-cert-file=/etc/kubernetes/pki/apiserver.crt 和 --tls-private-key-file=/etc/kubernetes/pki/apiserver.key 生成的
+// SNICerts 字段没有具体值
 // ApplyTo fills up serving information in the server configuration.
 func (s *SecureServingOptions) ApplyTo(config **server.SecureServingInfo) error {
 	if s == nil {
 		return nil
 	}
+	// 表示不设置 sureport
 	if s.BindPort <= 0 && s.Listener == nil {
 		return nil
 	}
 
 	if s.Listener == nil {
 		var err error
-		addr := net.JoinHostPort(s.BindAddress.String(), strconv.Itoa(s.BindPort))
+		addr := net.JoinHostPort(s.BindAddress.String(), strconv.Itoa(s.BindPort))  // 0.0.0.0：6443
 
 		c := net.ListenConfig{}
 
 		ctls := multipleControls{}
-		if s.PermitPortSharing {
+		if s.PermitPortSharing {  // false
 			ctls = append(ctls, permitPortReuse)
 		}
-		if s.PermitAddressSharing {
+		if s.PermitAddressSharing {  // false
 			ctls = append(ctls, permitAddressReuse)
 		}
 		if len(ctls) > 0 {
 			c.Control = ctls.Control
 		}
 
+		// 创建 listener
 		s.Listener, s.BindPort, err = CreateListener(s.BindNetwork, addr, c)
 		if err != nil {
 			return fmt.Errorf("failed to create listener: %v", err)
@@ -252,16 +275,22 @@ func (s *SecureServingOptions) ApplyTo(config **server.SecureServingInfo) error 
 		s.BindAddress = s.Listener.Addr().(*net.TCPAddr).IP
 	}
 
+	// 上一步创建的 listener
+	// secure server 的 config，包括了 listener
 	*config = &server.SecureServingInfo{
 		Listener:                     s.Listener,
 		HTTP2MaxStreamsPerConnection: s.HTTP2MaxStreamsPerConnection,
 	}
 	c := *config
 
+	// apiserver 启动的时候，传入了这两个参数：
+	// --tls-cert-file=/etc/kubernetes/pki/apiserver.crt
+	// --tls-private-key-file=/etc/kubernetes/pki/apiserver.key
 	serverCertFile, serverKeyFile := s.ServerCert.CertKey.CertFile, s.ServerCert.CertKey.KeyFile
 	// load main cert
-	if len(serverCertFile) != 0 || len(serverKeyFile) != 0 {
+	if len(serverCertFile) != 0 || len(serverKeyFile) != 0 {  // 默认貌似不是  /var/run/kubernetes/apiserver.crt/key
 		var err error
+		// apiserver 服务的 tls 配置
 		c.Cert, err = dynamiccertificates.NewDynamicServingContentFromFiles("serving-cert", serverCertFile, serverKeyFile)
 		if err != nil {
 			return err
@@ -286,7 +315,7 @@ func (s *SecureServingOptions) ApplyTo(config **server.SecureServingInfo) error 
 
 	// load SNI certs
 	namedTLSCerts := make([]dynamiccertificates.SNICertKeyContentProvider, 0, len(s.SNICertKeys))
-	for _, nck := range s.SNICertKeys {
+	for _, nck := range s.SNICertKeys {  // 默认值为空
 		tlsCert, err := dynamiccertificates.NewDynamicSNIContentFromFiles("sni-serving-cert", nck.CertFile, nck.KeyFile, nck.Names...)
 		namedTLSCerts = append(namedTLSCerts, tlsCert)
 		if err != nil {
@@ -297,7 +326,20 @@ func (s *SecureServingOptions) ApplyTo(config **server.SecureServingInfo) error 
 
 	return nil
 }
-
+// 填充 s.ServerCert.CertKey
+// 此时 SecureServingOptions 的值为：
+//o := genericoptions.SecureServingOptions{
+//BindAddress: net.ParseIP("0.0.0.0"),
+//BindPort:    6443,
+//Required:    true,
+//ServerCert: genericoptions.GeneratableKeyCert{
+//PairName:      "apiserver",
+//CertDirectory: "/var/run/kubernetes",
+//CertKey：
+//		CertFile： /var/run/kubernetes/apiserver.crt
+// 		KeyFile： /var/run/kubernetes/apiserver.key
+//},
+//}
 func (s *SecureServingOptions) MaybeDefaultWithSelfSignedCerts(publicAddress string, alternateDNS []string, alternateIPs []net.IP) error {
 	if s == nil || (s.BindPort == 0 && s.Listener == nil) {
 		return nil
@@ -308,12 +350,12 @@ func (s *SecureServingOptions) MaybeDefaultWithSelfSignedCerts(publicAddress str
 	}
 
 	canReadCertAndKey := false
-	if len(s.ServerCert.CertDirectory) > 0 {
-		if len(s.ServerCert.PairName) == 0 {
+	if len(s.ServerCert.CertDirectory) > 0 {  // 默认 CertDirectory: "/var/run/kubernetes",
+		if len(s.ServerCert.PairName) == 0 {  // 默认 PairName:      "apiserver",
 			return fmt.Errorf("PairName is required if CertDirectory is set")
 		}
-		keyCert.CertFile = path.Join(s.ServerCert.CertDirectory, s.ServerCert.PairName+".crt")
-		keyCert.KeyFile = path.Join(s.ServerCert.CertDirectory, s.ServerCert.PairName+".key")
+		keyCert.CertFile = path.Join(s.ServerCert.CertDirectory, s.ServerCert.PairName+".crt")  // /var/run/kubernetes/apiserver.crt
+		keyCert.KeyFile = path.Join(s.ServerCert.CertDirectory, s.ServerCert.PairName+".key")  // /var/run/kubernetes/apiserver.key
 		if canRead, err := certutil.CanReadCertAndKey(keyCert.CertFile, keyCert.KeyFile); err != nil {
 			return err
 		} else {
@@ -321,12 +363,13 @@ func (s *SecureServingOptions) MaybeDefaultWithSelfSignedCerts(publicAddress str
 		}
 	}
 
-	if !canReadCertAndKey {
+	if !canReadCertAndKey {  // 如果不存在以上两个文件
+		// 证书中需要添加IP：localhost 或者是 0.0.0.0
 		// add either the bind address or localhost to the valid alternates
 		if s.BindAddress.IsUnspecified() {
 			alternateDNS = append(alternateDNS, "localhost")
 		} else {
-			alternateIPs = append(alternateIPs, s.BindAddress)
+			alternateIPs = append(alternateIPs, s.BindAddress)  // BindAddress = 0.0.0.0
 		}
 
 		if cert, key, err := certutil.GenerateSelfSignedCertKeyWithFixtures(publicAddress, alternateIPs, alternateDNS, s.ServerCert.FixtureDirectory); err != nil {
