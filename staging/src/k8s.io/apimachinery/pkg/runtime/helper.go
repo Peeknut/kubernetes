@@ -211,15 +211,24 @@ type defaultFramer struct{}
 func (defaultFramer) NewFrameReader(r io.ReadCloser) io.ReadCloser { return r }
 func (defaultFramer) NewFrameWriter(w io.Writer) io.Writer         { return w }
 
+// ok
 // WithVersionEncoder serializes an object and ensures the GVK is set.
 type WithVersionEncoder struct {
+	//  encode 将对象的 gvk 信息修改为 WithVersionEncoder 的 gvk 信息，然后将其序列化（序列化格式由 encoder 本身决定）
+	// 过程中并不会把对象转换版本，只是简单的修改 gvk 信息
 	Version GroupVersioner
+	// 序列化器（序列化格式——比如 json、yaml、pb 由其本身决定）
 	Encoder
+	// 根据 obj 获取其 gvk 信息
 	ObjectTyper
 }
 
+// ok
+// encode 将对象的 gvk 信息修改为 WithVersionEncoder 的 gvk 信息，然后将其序列化（序列化格式由 encoder 本身决定）
+// 过程中并不会把对象转换版本，只是简单的修改 gvk 信息
 // Encode does not do conversion. It sets the gvk during serialization.
 func (e WithVersionEncoder) Encode(obj Object, stream io.Writer) error {
+	// 获取 obj 的 gvk 信息
 	gvks, _, err := e.ObjectTyper.ObjectKinds(obj)
 	if err != nil {
 		if IsNotRegisteredError(err) {
@@ -231,22 +240,27 @@ func (e WithVersionEncoder) Encode(obj Object, stream io.Writer) error {
 	oldGVK := kind.GroupVersionKind()
 	gvk := gvks[0]
 	if e.Version != nil {
+		// 判断 obj 的 gvk 信息和 encoder 管理的 gvk 信息是否匹配
 		preferredGVK, ok := e.Version.KindForGroupVersionKinds(gvks)
 		if ok {
 			gvk = preferredGVK
 		}
 	}
+	// 修改 obj 的 gvk 信息
 	kind.SetGroupVersionKind(gvk)
 	err = e.Encoder.Encode(obj, stream)
 	kind.SetGroupVersionKind(oldGVK)
 	return err
 }
 
+// 没有 gvk 信息，gvk 信息的获取会从 obj 本身或者传入的参数获取
 // WithoutVersionDecoder clears the group version kind of a deserialized object.
 type WithoutVersionDecoder struct {
 	Decoder
 }
 
+// ok
+// 将数据解码为 obj（目标对象的 gvk 信息获取跟 decoder 一样），并将 obj 的 gvk 信息清除
 // Decode does not do conversion. It removes the gvk during deserialization.
 func (d WithoutVersionDecoder) Decode(data []byte, defaults *schema.GroupVersionKind, into Object) (Object, *schema.GroupVersionKind, error) {
 	obj, gvk, err := d.Decoder.Decode(data, defaults, into)

@@ -28,29 +28,42 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/serializer/versioning"
 )
 
+// 另外编译进来的序列化器
 // serializerExtensions are for serializers that are conditionally compiled in
 var serializerExtensions = []func(*runtime.Scheme) (serializerType, bool){}
 
+// ok
+// Q：这个结构体的内容跟 runtime.SerializerInfo 对应，为什么要重新定一个这个结构体？
+// A：这个结构体信息更加全面，对内使用；runtime.SerializerInfo 对外使用
 type serializerType struct {
+	// 比如： application/json
 	AcceptContentTypes []string
+	// 比如： application/json
 	ContentType        string
+	// 比如：json、pb、yaml
 	FileExtensions     []string
+	// 是否可以安全的编码为 utf-8 格式
 	// EncodesAsText should be true if this content type can be represented safely in UTF-8
 	EncodesAsText bool
 
+	// 对应格式（json、protobuf、yaml 等与 mediatype 对应的格式）的序列化器
 	Serializer       runtime.Serializer
-	// 根据 serializer option 中的字段 pretty 来配置（是否可读性友好）
+	// 对应格式（json、protobuf、yaml 等与 mediatype 对应的格式）的序列化器——根据 serializer option 中的字段 pretty 来配置（是否可读性友好）
 	PrettySerializer runtime.Serializer
 
+	// json、pb、yaml serializer 中没有设置这个参数
 	AcceptStreamContentTypes []string
+	// json、pb、yaml serializer 中没有设置这个参数
 	StreamContentType        string
 
+	// 下面两个需要搭配使用
 	// 接口：用于获取序列化格式（json、protobuf、yaml）的 reader & writers
 	Framer           runtime.Framer
-	// 根据 serializer option 来配置
+	// json、pb 都会设置，yaml 不会设置
 	StreamSerializer runtime.Serializer
 }
 
+// ok
 // 创建3种格式的 serializer（json、protobuf、yaml）
 func newSerializersForScheme(scheme *runtime.Scheme, mf json.MetaFactory, options CodecFactoryOptions) []serializerType {
 	// step1：创建 json serializer
@@ -70,6 +83,7 @@ func newSerializersForScheme(scheme *runtime.Scheme, mf json.MetaFactory, option
 		StreamSerializer: jsonSerializer,
 	}
 	// TODO：为什么这里还需要创建一个 pretty 的？因为 serializer 创建之后 options 就不能变了么？
+	// 只有 json 需要额外创建 pretty Serializer，因为 pretty 只有在 encode 时使用，是为了encode结果让用户可读性更好，yaml、protobuf 格式可读性本来就很好，所以不需要单独设置
 	if options.Pretty {
 		jsonSerializerType.PrettySerializer = json.NewSerializerWithOptions(
 			mf, scheme, scheme,
@@ -78,6 +92,7 @@ func newSerializersForScheme(scheme *runtime.Scheme, mf json.MetaFactory, option
 	}
 
 	// step2：创建 yaml serializer
+	// yaml 和 json 的 serializer 都定义在 json serializer 中，通过字段 ymal bool 来区分
 	yamlSerializer := json.NewSerializerWithOptions(
 		mf, scheme, scheme,
 		json.SerializerOptions{Yaml: true, Pretty: false, Strict: options.Strict},
@@ -107,7 +122,7 @@ func newSerializersForScheme(scheme *runtime.Scheme, mf json.MetaFactory, option
 		},
 	}
 
-	// TODO：serializerExtensions 中是什么，这里好像是空的？或者是用户自己扩展的？
+	// step4：用户扩展的 serializer
 	for _, fn := range serializerExtensions {
 		if serializer, ok := fn(scheme); ok {
 			serializers = append(serializers, serializer)
@@ -116,22 +131,27 @@ func newSerializersForScheme(scheme *runtime.Scheme, mf json.MetaFactory, option
 	return serializers
 }
 
+// ok
 // 提供了 获取某个版本以及 content types（json 等）的 codecs（编解码器）以及 serializer（序列化器）的方法
 // CodecFactory provides methods for retrieving codecs and serializers for specific
 // versions and content types.
 type CodecFactory struct {
 	// 资源注册表
 	scheme    *runtime.Scheme
-	// TOD：为什么只有 decoder 方法，没有 encoder 方法？——有的，在 accepts 字段中
+	// TODO：为什么只有 decoder 方法，没有 encoder 方法？——有的，在 accepts 字段中
 	// 万能解码器，不用根据序列化格式类型初始化具体的类型，用它就可以自动识别序列化格式类型并进行解码
+	// 是由 accepts 字段中所有的 serializer 中的 decoder 组成的
+	// 可以作为 codec 默认的 decoder
 	universal runtime.Decoder
 	// 各个类型（json、pb、yaml）的 serializer（包含 decoder/encoder） 也在这里
 	accepts   []runtime.SerializerInfo
 
-	// TODO：这个字段的作用是什么？（如果有 json serializer 会使用，没有的话，用第一个 serializer 作为他的值）
+	// TODO：这个字段的作用是什么？（如果没有 json serializer，那么使用第一个 serializer 作为 legacySerializer）
+	// 可以作为 codec 默认的 encoder
 	legacySerializer runtime.Serializer
 }
 
+// ok
 // 含义参考：staging/src/k8s.io/apimachinery/pkg/runtime/serializer/json/json.go：SerializerOptions
 // CodecFactoryOptions holds the options for configuring CodecFactory behavior
 type CodecFactoryOptions struct {
@@ -167,11 +187,16 @@ func DisableStrict(options *CodecFactoryOptions) {
 	options.Strict = false
 }
 
+// ok
+// NewCodecFactory 提供了以下方法：
+// 1、根据序列化格式检索序列化器（serializer）
+// TODO：2、检索版本转换包装器，以定义首选的内部以及外部版本
 // NewCodecFactory provides methods for retrieving serializers for the supported wire formats
 // and conversion wrappers to define preferred internal and external versions. In the future,
 // as the internal version is used less, callers may instead use a defaulting serializer and
 // only convert objects which are shared internally (Status, common API machinery).
 //
+// 参数 mutators 在 factory 创建之前，配置 CodecFactoryOptions
 // Mutators can be passed to change the CodecFactoryOptions before construction of the factory.
 // It is recommended to explicitly pass mutators instead of relying on defaults.
 // By default, Pretty is enabled -- this is conformant with previously supported behavior.
@@ -179,29 +204,38 @@ func DisableStrict(options *CodecFactoryOptions) {
 // TODO: allow other codecs to be compiled in?
 // TODO: accept a scheme interface
 func NewCodecFactory(scheme *runtime.Scheme, mutators ...CodecFactoryOptionsMutator) CodecFactory {
+	// 1、根据传入的参数 mutators 配置 CodecFactoryOptions
 	options := CodecFactoryOptions{Pretty: true}
 	for _, fn := range mutators {
 		fn(&options)
 	}
 
+	// 2、创建各个序列化格式（（json、protobuf、yaml））的序列化器
 	serializers := newSerializersForScheme(scheme, json.DefaultMetaFactory, options)
+	// 3、创建 CodecFactory
 	return newCodecFactory(scheme, serializers)
 }
 
+// ok
 // newCodecFactory is a helper for testing that allows a different metafactory to be specified.
 func newCodecFactory(scheme *runtime.Scheme, serializers []serializerType) CodecFactory {
 	decoders := make([]runtime.Decoder, 0, len(serializers))
 	var accepts []runtime.SerializerInfo
 	alreadyAccepted := make(map[string]struct{})
 
+	// 1、生成万能解码器decoder（无论是 json、yaml、pb 格式的数据都能用他来解码为具体的数据结构），用来配置 CodecFactory.universal 字段
+	// 1、某一序列化格式筛选出一个序列化器 serializer，生成 CodecFactory.accepts 字段
 	var legacySerializer runtime.Serializer
 	for _, d := range serializers {
+		// 1-1、获取 serializer 中的 decoder
 		decoders = append(decoders, d.Serializer)
+		// 1-2、获取 serializer 对应的序列化格式
 		for _, mediaType := range d.AcceptContentTypes {
-			// 多个acceptContentTypes 相同的 serializer，只选择一个
+			// 如果序列化格式对应的 serializer 已经存在，则跳过
 			if _, ok := alreadyAccepted[mediaType]; ok {
 				continue
 			}
+			// 创建某一序列化格式对应的 serializerInfo
 			alreadyAccepted[mediaType] = struct{}{}
 			info := runtime.SerializerInfo{
 				MediaType:        d.ContentType,
@@ -250,6 +284,7 @@ func newCodecFactory(scheme *runtime.Scheme, serializers []serializerType) Codec
 	}
 }
 
+// TODO: 这里的转换是指什么？
 // WithoutConversion returns a NegotiatedSerializer that performs no conversion, even if the
 // caller requests it.
 func (f CodecFactory) WithoutConversion() runtime.NegotiatedSerializer {
@@ -261,8 +296,10 @@ func (f CodecFactory) SupportedMediaTypes() []runtime.SerializerInfo {
 	return f.accepts
 }
 
-// 序列化（encode）为一个给定的 API 版本，反序列化为 internal 版本。
+// ok
+// 序列化（encode）为一个给定的 API 版本，反序列化（decode）为 internal 版本。
 // 这里返回的 编解码器（codec）总是序列化为 json 。
+// TODO：这里 encoder 为特定版本是什么意思，encoder 不是不会考虑版本么？
 // LegacyCodec encodes output to a given API versions, and decodes output into the internal form from
 // any recognized source. The returned codec will always encode output to JSON. If a type is not
 // found in the list of versions an error will be returned.
@@ -273,18 +310,21 @@ func (f CodecFactory) SupportedMediaTypes() []runtime.SerializerInfo {
 // TODO: make this call exist only in pkg/api, and initialize it with the set of default versions.
 //   All other callers will be forced to request a Codec directly.
 func (f CodecFactory) LegacyCodec(version ...schema.GroupVersion) runtime.Codec {
+	// f.legacySerializer 为 json 的序列化器
+	// 使用（encodeVersion，decodeVersion） codec 进行 encode，会将某 gvk 版本的 obj 序列化为 gvk 为 encodeVersion 的 obj（格式为json）
+	// 使用（encodeVersion，decodeVersion） codec 进行 decoder，能够解析所有序列化格式（json、pb、yaml）的数据为 gvk 为 decodeVersion 的 obj
 	return versioning.NewDefaultingCodecForScheme(f.scheme, f.legacySerializer, f.universal, schema.GroupVersions(version), runtime.InternalGroupVersioner)
 }
 
-// 转换存储的对象为 go object
+// ok
 // UniversalDeserializer can convert any stored data recognized by this factory into a Go object that satisfies
 // runtime.Object. It does not perform conversion. It does not perform defaulting.
 func (f CodecFactory) UniversalDeserializer() runtime.Decoder {
 	return f.universal
 }
 
-// 仅解码在方案中注册的组中的对象。 传递的 GroupVersions 可用于选择要返回的对象的替代版本
-//- 默认情况下，使用 runtime.APIVersionInternal。 如果指定了任何版本，未识别的组将在它们被编码为的版本中返回（无转换）。 此解码器执行默认设置。
+// ok
+// 创建能够解析任意序列化格式（json、yaml、pb）的 decoder，该 decoder 将解码为 versioner 中的首选版本
 // UniversalDecoder returns a runtime.Decoder capable of decoding all known API objects in all known formats. Used
 // by clients that do not need to encode objects but want to deserialize API objects stored on disk. Only decodes
 // objects in groups registered with the scheme. The GroupVersions passed may be used to select alternate
@@ -304,6 +344,7 @@ func (f CodecFactory) UniversalDecoder(versions ...schema.GroupVersion) runtime.
 	return f.CodecForVersions(nil, f.universal, nil, versioner)
 }
 
+// ok
 // 根据传入的序列化器创建编解码器。如果反序列化的group 信息不在list中，则默认使用 internal 版本。如果序列化没有指定group，那么对象不会被转换
 // CodecForVersions creates a codec with the provided serializer. If an object is decoded and its group is not in the list,
 // it will default to runtime.APIVersionInternal. If encode is not specified for an object's group, the object is not
@@ -319,12 +360,14 @@ func (f CodecFactory) CodecForVersions(encoder runtime.Encoder, decoder runtime.
 	return versioning.NewDefaultingCodecForScheme(f.scheme, encoder, decoder, encode, decode)
 }
 
+// ok
 // 反序列化为给定gv的 decoder，如果gv没有给定，默认为 internal 版本
 // DecoderToVersion returns a decoder that targets the provided group version.
 func (f CodecFactory) DecoderToVersion(decoder runtime.Decoder, gv runtime.GroupVersioner) runtime.Decoder {
 	return f.CodecForVersions(nil, decoder, nil, gv)
 }
 
+// ok
 // 序列化给定 gv 的 encoder，如果 gv 没有给定，默认为 disable
 // TODO：runtime.DisabledGroupVersioner 是什么类型？
 // 		输入的 encoder 和输出的 ecoder 的差别是什么？为什么需要输入参数 encoder？
@@ -341,6 +384,10 @@ type WithoutConversionCodecFactory struct {
 	CodecFactory
 }
 
+// ok
+// Q：为什么要重写这两个函数？
+// A：encode 将对象的 gvk 信息修改为 WithVersionEncoder 的 gvk 信息，然后将其序列化（序列化格式由 encoder 本身决定）。过程中并不会把对象转换版本，只是简单的修改 gvk 信息
+// 与 CodecFactory 的差别就是 CodecFactory 会将 obj 先转换为目标 version，然后再序列化
 // EncoderForVersion returns an encoder that does not do conversion, but does set the group version kind of the object
 // when serialized.
 func (f WithoutConversionCodecFactory) EncoderForVersion(serializer runtime.Encoder, version runtime.GroupVersioner) runtime.Encoder {
@@ -351,6 +398,9 @@ func (f WithoutConversionCodecFactory) EncoderForVersion(serializer runtime.Enco
 	}
 }
 
+// ok
+// 与 CodecFactory 的差别就是 CodecFactory 会将数据解码为目标 gvk（由CodecFactory的decodeVersion决定），
+// WithoutConversionCodecFactory 会将数据解码（目标 gvk 从obj中获取）并清除其gvk信息
 // DecoderToVersion returns an decoder that does not do conversion.
 func (f WithoutConversionCodecFactory) DecoderToVersion(serializer runtime.Decoder, _ runtime.GroupVersioner) runtime.Decoder {
 	return runtime.WithoutVersionDecoder{

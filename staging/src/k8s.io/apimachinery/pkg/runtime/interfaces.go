@@ -128,6 +128,7 @@ type Framer interface {
 	NewFrameWriter(w io.Writer) io.Writer
 }
 
+// 特定序列化格式的序列化器的信息（一般有 json、protobuf、yaml 格式）
 // SerializerInfo contains information about a specific serialization format
 type SerializerInfo struct {
 	// 比如：application/json
@@ -139,13 +140,18 @@ type SerializerInfo struct {
 	// 比如  json
 	// MediaTypeSubType is the second part of the MediaType ("json" in "application/json").
 	MediaTypeSubType string
+	// 是否可以安全的编码为 utf-8 格式
 	// EncodesAsText indicates this serializer can be encoded to UTF-8 safely.
 	EncodesAsText bool
+	// 对应格式（json、protobuf、yaml 等与 mediatype 对应的格式）的序列化器
 	// Serializer is the individual object serializer for this media type.
 	Serializer Serializer
+	// 对应格式（json、protobuf、yaml 等与 mediatype 对应的格式）的序列化器——与 Serializer 的差别应该就是 pretty 字段设置不同
+	// 只对 encode 起作用，encode之后的结果可读性更强，对 yaml 序列化器没有作用，因为yaml本身可读性就很强
 	// PrettySerializer, if set, can serialize this object in a form biased towards
 	// readability.
 	PrettySerializer Serializer
+	// 对应格式（json、protobuf、yaml 等与 mediatype 对应的格式）的序列化器——也是从 Serializer 生成的
 	// StreamSerializer, if set, describes the streaming serialization format
 	// for this media type.
 	StreamSerializer *StreamSerializerInfo
@@ -161,13 +167,14 @@ type StreamSerializerInfo struct {
 	Framer
 }
 
+// 这是所有 codec-factory 的接口。不同 codec-factory 用于生成不同类型的 codec
 // 根据资源类型，获取对应的 encoder/decoder/serializer。
 // 一般用于 server 解析 http 请求
 // NegotiatedSerializer is an interface used for obtaining encoders, decoders, and serializers
 // for multiple supported media types. This would commonly be accepted by a server component
 // that performs HTTP content negotiation to accept multiple formats.
 type NegotiatedSerializer interface {
-	// 支持读写的数据类型
+	// 支持的序列化器
 	// SupportedMediaTypes is the media types supported for reading and writing single objects.
 	SupportedMediaTypes() []SerializerInfo
 
@@ -230,6 +237,7 @@ type StorageSerializer interface {
 }
 
 // Nested 嵌套
+// 编码obj中嵌套的obj或者RawExtensions。如果有这个编码需求的，obj 需要实现这个接口
 // NestedObjectEncoder is an optional interface that objects may implement to be given
 // an opportunity to encode any nested Objects / RawExtensions during serialization.
 type NestedObjectEncoder interface {
@@ -263,6 +271,7 @@ type ObjectConvertor interface {
 	// i.e. the out object cannot be mutated without mutating the in object as well.
 	// The context argument will be passed to all nested conversions.
 	Convert(in, out, context interface{}) error
+	//// ConvertToVersion：将传入的（in）资源对象转换成目标（target）资源版本，在版本转换之前，会将资源对象深复制一份后再执行转换操作，相当于安全的内存对象转换操作
 	// ConvertToVersion takes the provided object and converts it the provided version. This
 	// method does not mutate the in object, but the in and out object might share data structures,
 	// i.e. the out object cannot be mutated without mutating the in object as well.

@@ -30,6 +30,8 @@ type NameFunc func(t reflect.Type) string
 
 var DefaultNameFunc = func(t reflect.Type) string { return t.Name() }
 
+// 定义了转换函数实现的结构，将资源对象a转换为资源对象b。
+// a参数定义了转换源（即source）的资源类型，b参数定义了转换目标（即dest）的资源类型。scope定义了多次转换机制（即递归调用转换函数）。
 // ConversionFunc converts the object a into the object b, reusing arrays or objects
 // or pointers if necessary. It should return an error if the object cannot be converted
 // or if some data is invalid. If you do not wish a and b to share fields or nested
@@ -40,16 +42,20 @@ type ConversionFunc func(a, b interface{}, scope Scope) error
 type Converter struct {
 	// Map from the conversion pair to a function which can
 	// do the conversion.
+	// 默认转换函数。这些转换函数一般定义在资源目录下的conversion.go代码文件中
 	conversionFuncs          ConversionFuncs
+	// 自动生成的转换函数。这些转换函数一般定义在资源目录下的zz_generated.conversion.go代码文件中，是由代码生成器自动生成的转换函数。
 	generatedConversionFuncs ConversionFuncs
 
 	// Set of conversions that should be treated as a no-op
+	// 若资源对象注册到此字段，则忽略此资源对象的转换操作。
 	ignoredConversions        map[typePair]struct{}
 	ignoredUntypedConversions map[typePair]struct{}
 
 	// nameFunc is called to retrieve the name of a type; this name is used for the
 	// purpose of deciding whether two types match or not (i.e., will we attempt to
 	// do a conversion). The default returns the go type name.
+	// 在转换过程中其用于获取资源种类的名称，该函数被定义在vendor/k8s.io/apimachinery/pkg/runtime/scheme.go代码文件中
 	nameFunc func(t reflect.Type) string
 }
 
@@ -197,6 +203,7 @@ func (c *Converter) RegisterIgnoredConversion(from, to interface{}) error {
 	return nil
 }
 
+// 参数 meta 用于配置 conversion 方法，Convert() 不使用它，除了将其存储在作用域中。
 // Convert will translate src to dest if it knows how. Both must be pointers.
 // If no conversion func is registered and the default copying mechanism
 // doesn't work on this type pair, an error will be returned.
@@ -214,13 +221,17 @@ func (c *Converter) Convert(src, dest interface{}, meta *Meta) error {
 	if _, ok := c.ignoredUntypedConversions[pair]; ok {
 		return nil
 	}
+	// 从默认转换函数列表（即c.conversionFuncs）中查找出pair对应的转换函数，如果存在则执行该转换函数（即fn）并返回。
 	if fn, ok := c.conversionFuncs.untyped[pair]; ok {
+		// TODO：scope 的作用不知道是什么？他的使用应该是在各个版本中的 conversion.go 文件中
 		return fn(src, dest, scope)
 	}
+	// 从自动生成的转换函数列表（即generatedConversionFuncs）中查找出pair对应的转换函数，如果存在则执行该转换函数（即fn）并返回。
 	if fn, ok := c.generatedConversionFuncs.untyped[pair]; ok {
 		return fn(src, dest, scope)
 	}
 
+	// 将src与dest资源对象通过EnforcePtr函数取指针的值，因为Convert函数传入的转换函数接收的是非指针资源对象。
 	dv, err := EnforcePtr(dest)
 	if err != nil {
 		return err

@@ -325,6 +325,7 @@ func (s *Scheme) New(kind schema.GroupVersionKind) (Object, error) {
 	return nil, NewNotRegisteredErrForKind(s.schemeName, kind)
 }
 
+//注册忽略的资源类型，不会执行转换操作，忽略资源对象的转换操作。
 // AddIgnoredConversionType identifies a pair of types that should be skipped by
 // conversion (because the data inside them is explicitly dropped during
 // conversion).
@@ -332,6 +333,7 @@ func (s *Scheme) AddIgnoredConversionType(from, to interface{}) error {
 	return s.converter.RegisterIgnoredConversion(from, to)
 }
 
+//注册单个Conversion Func转换函数。
 // AddConversionFunc registers a function that converts between a and b by passing objects of those
 // types to the provided function. The function *must* accept objects of a and b - this machinery will not enforce
 // any other guarantee.
@@ -339,6 +341,7 @@ func (s *Scheme) AddConversionFunc(a, b interface{}, fn conversion.ConversionFun
 	return s.converter.RegisterUntypedConversionFunc(a, b, fn)
 }
 
+// 注册自动生成的转换函数。
 // AddGeneratedConversionFunc registers a function that converts between a and b by passing objects of those
 // types to the provided function. The function *must* accept objects of a and b - this machinery will not enforce
 // any other guarantee.
@@ -346,6 +349,7 @@ func (s *Scheme) AddGeneratedConversionFunc(a, b interface{}, fn conversion.Conv
 	return s.converter.RegisterGeneratedUntypedConversionFunc(a, b, fn)
 }
 
+// 注册字段标签（FieldLabel）的转换函数。
 // AddFieldLabelConversionFunc adds a conversion function to convert field selectors
 // of the given kind from the given version to internal version representation.
 func (s *Scheme) AddFieldLabelConversionFunc(gvk schema.GroupVersionKind, conversionFunc FieldLabelConversionFunc) error {
@@ -376,15 +380,21 @@ func (s *Scheme) Default(src Object) {
 // context interface is passed to the convertor. Convert also supports Unstructured
 // types and will convert them intelligently.
 func (s *Scheme) Convert(in, out interface{}, context interface{}) error {
+	// 判断 in/out obj 是否为 unstructured
+	// TODO：unstructured 是 cd 资源么？
 	unstructuredIn, okIn := in.(Unstructured)
 	unstructuredOut, okOut := out.(Unstructured)
 	switch {
+	// 1、如果 in/out 都是 unstructured，直接复制内容
 	case okIn && okOut:
 		// converting unstructured input to an unstructured output is a straight copy - unstructured
 		// is a "smart holder" and the contents are passed by reference between the two objects
 		unstructuredOut.SetUnstructuredContent(unstructuredIn.UnstructuredContent())
 		return nil
 
+	//	2、如果 out 是 unstructured，根据 in 的版本：
+	//	1）如果是 unversioned 或者是某个具体版本，直接进行转换到 obj；
+	//	2）如果是 internal 版本，需要将其转换为 context 指定的版本，然后再将其转换到 obj
 	case okOut:
 		// if the output is an unstructured object, use the standard Go type to unstructured
 		// conversion. The object must not be internal.
@@ -398,6 +408,7 @@ func (s *Scheme) Convert(in, out interface{}, context interface{}) error {
 		}
 		gvk := gvks[0]
 
+		// 如果 in 的版本是 unversioned 或者不是 internal 版本（即除了 internal 版本的版本），直接进行将 in obj 转换为 unstructured 格式（gvk 信息与 in 相同）
 		// if no conversion is necessary, convert immediately
 		if unversioned || gvk.Version != APIVersionInternal {
 			content, err := DefaultUnstructuredConverter.ToUnstructured(in)
@@ -409,11 +420,13 @@ func (s *Scheme) Convert(in, out interface{}, context interface{}) error {
 			return nil
 		}
 
+		// 如果 in 的版本是 internal 版本，现将 in 转换为 context 指定的 gvk 版本，然后再将其转换为 unstructured 格式（gvk 信息与 context 相同）
 		// attempt to convert the object to an external version first.
 		target, ok := context.(GroupVersioner)
 		if !ok {
 			return fmt.Errorf("unable to convert the internal object type %T to Unstructured without providing a preferred version to convert to", in)
 		}
+		// UnsafeConvertToVersion： 与scheme.ConvertToVersion功能相同，但在转换过程中不会深复制资源对象，而是直接对原资源对象进行转换操作，尽可能高效地实现转换。但该操作是非安全的内存对象转换操作
 		// Convert is implicitly unsafe, so we don't need to perform a safe conversion
 		versioned, err := s.UnsafeConvertToVersion(obj, target)
 		if err != nil {
@@ -426,7 +439,9 @@ func (s *Scheme) Convert(in, out interface{}, context interface{}) error {
 		unstructuredOut.SetUnstructuredContent(content)
 		return nil
 
+	//	3、如果 in 是 unstructured
 	case okIn:
+		// 先将其从 unstructured 转换为 obj
 		// converting an unstructured object to any type is modeled by first converting
 		// the input to a versioned type, then running standard conversions
 		typed, err := s.unstructuredToTyped(unstructuredIn)
@@ -436,6 +451,7 @@ func (s *Scheme) Convert(in, out interface{}, context interface{}) error {
 		in = typed
 	}
 
+	// 到这里 in/out 都是某个具体的 gvk 信息
 	meta := s.generateConvertMeta(in)
 	meta.Context = context
 	return s.converter.Convert(in, out, meta)
@@ -451,6 +467,8 @@ func (s *Scheme) ConvertFieldLabel(gvk schema.GroupVersionKind, label, value str
 	return conversionFunc(label, value)
 }
 
+// target 表示要转换成的版本
+// 将传入的（in）资源对象转换成目标（target）资源版本，在版本转换之前，会将资源对象深复制一份后再执行转换操作，相当于安全的内存对象转换操作。
 // ConvertToVersion attempts to convert an input object to its matching Kind in another
 // version within this scheme. Will return an error if the provided version does not
 // contain the inKind (or a mapping by name defined with AddKnownTypeWithName). Will also
@@ -460,6 +478,8 @@ func (s *Scheme) ConvertToVersion(in Object, target GroupVersioner) (Object, err
 	return s.convertToVersion(true, in, target)
 }
 
+// target 表示要转换成的版本
+// 与scheme.ConvertToVersion功能相同，但在转换过程中不会深复制资源对象，而是直接对原资源对象进行转换操作，尽可能高效地实现转换。但该操作是非安全的内存对象转换操作。
 // UnsafeConvertToVersion will convert in to the provided target if such a conversion is possible,
 // but does not guarantee the output object does not share fields with the input object. It attempts to be as
 // efficient as possible when doing conversion.
@@ -467,10 +487,12 @@ func (s *Scheme) UnsafeConvertToVersion(in Object, target GroupVersioner) (Objec
 	return s.convertToVersion(false, in, target)
 }
 
+// 真正实现版本转换的函数
 // convertToVersion handles conversion with an optional copy.
 func (s *Scheme) convertToVersion(copy bool, in Object, target GroupVersioner) (Object, error) {
 	var t reflect.Type
 
+	// 1、获取传入的资源对象的反射类型
 	if u, ok := in.(Unstructured); ok {
 		typed, err := s.unstructuredToTyped(u)
 		if err != nil {
@@ -493,11 +515,17 @@ func (s *Scheme) convertToVersion(copy bool, in Object, target GroupVersioner) (
 		}
 	}
 
+	// 2、从资源注册表中查找到传入的资源对象的GVK
 	kinds, ok := s.typeToGVK[t]
 	if !ok || len(kinds) == 0 {
 		return nil, NewNotRegisteredErrForType(s.schemeName, t)
 	}
 
+	// 3、从多个GVK中选出与目标资源对象相匹配的GVK
+	// target.KindForGroupVersionKinds函数从多个可转换的GVK中选出与目标资源对象相匹配的GVK。
+	//这里有一个优化点，转换过程是相对耗时的，大量的相同资源之间进行版本转换的耗时会比较长。
+	//在Kubernetes源码中判断，如果目标资源对象的GVK在可转换的GVK列表中，则直接将传入的资源对象的GVK设置为目标资源对象的GVK，
+	//而无须执行转换操作，缩短部分耗时。
 	gvk, ok := target.KindForGroupVersionKinds(kinds)
 	if !ok {
 		// try to see if this type is listed as unversioned (for legacy support)
@@ -518,6 +546,9 @@ func (s *Scheme) convertToVersion(copy bool, in Object, target GroupVersioner) (
 		}
 	}
 
+	// 4、判断传入的资源对象是否属于Unversioned类型
+	// 对于Unversioned类型，前面曾介绍过，即无版本类型（UnversionedType）。
+	//属于该类型的资源对象并不需要进行转换操作，而是直接将传入的资源对象的GVK设置为目标资源对象的GVK。
 	// type is unversioned, no conversion necessary
 	if unversionedKind, ok := s.unversionedTypes[t]; ok {
 		if gvk, ok := target.KindForGroupVersionKinds([]schema.GroupVersionKind{unversionedKind}); ok {
@@ -531,6 +562,8 @@ func (s *Scheme) convertToVersion(copy bool, in Object, target GroupVersioner) (
 		return nil, err
 	}
 
+	// 5、执行转换操作
+	// 在执行转换操作之前，先判断是否需要对传入的资源对象执行深复制操作，然后通过s.converter.Convert转换函数执行转换操作，
 	if copy {
 		in = in.DeepCopyObject()
 	}
@@ -541,6 +574,7 @@ func (s *Scheme) convertToVersion(copy bool, in Object, target GroupVersioner) (
 		return nil, err
 	}
 
+	// 6、设置转换后资源对象的GVK
 	setTargetKind(out, gvk)
 	return out, nil
 }

@@ -248,6 +248,7 @@ func gvkWithDefaults(actual, defaultGVK schema.GroupVersionKind) schema.GroupVer
 	return actual
 }
 
+// TODO：怎么保证输入的参数 gvk、into 与 data 中获取的参数的 gvk 信息有一定的相关性？还是不需要有相关性，因为会在 scheme 中检查对应的 gvk 信息？
 // Decode实现了Decoder.Decode()，尝试从数据中提取的API类型(GVK)，应用提供的默认GVK，然后将数据加载到所需类型或提供的'into'匹配的对象中：
 // 1. 如果into为*runtime.Unknown，则将提取原始数据，并且不执行解码；
 // 2. 如果into的类型没有在Schema注册，则使用json.Unmarshal()直接反序列化到'into'指向的对象中；

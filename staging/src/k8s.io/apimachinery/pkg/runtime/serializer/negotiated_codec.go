@@ -34,6 +34,8 @@ func (n *negotiatedSerializerWrapper) SupportedMediaTypes() []runtime.Serializer
 	return []runtime.SerializerInfo{n.info}
 }
 
+// TODO：为什么这里直接返回传入的参数 encoder？
+// A：这是统一的接口，所有的 codec-factory 使用的时候应该是需要将自己的 SupportedMediaTypes 传入 EncoderForVersion 中的。
 func (n *negotiatedSerializerWrapper) EncoderForVersion(e runtime.Encoder, _ runtime.GroupVersioner) runtime.Encoder {
 	return e
 }

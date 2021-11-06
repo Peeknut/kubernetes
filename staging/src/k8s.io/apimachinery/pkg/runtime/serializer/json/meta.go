@@ -35,6 +35,7 @@ type MetaFactory interface {
 
 
 // SimpleMetaFactory是MetaFactory的一种实现，用于检索在json中由"apiVersion"和"kind"字段标识的对象的类型和版本。
+// unstructured 那边会使用这个：staging/src/k8s.io/apimachinery/pkg/apis/meta/v1/unstructured/unstructuredscheme/scheme.go
 // DefaultMetaFactory is a default factory for versioning objects in JSON. The object
 // in memory and in the default JSON serialization will use the "kind" and "apiVersion"
 // fields.

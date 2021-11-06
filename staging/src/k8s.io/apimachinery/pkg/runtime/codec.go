@@ -32,6 +32,8 @@ import (
 	"k8s.io/klog/v2"
 )
 
+// TODO：和 serializer interface 的差别在哪里
+// A：编解码器，serializer 是 codec 的一种（serializer 将对象转换为字符串）
 // 我们把interface作为struct的一个匿名成员，就可以假设struct就是此成员interface的一个实现，而不管struct是否已经实现interface所定义的函数。
 //嵌入interface可以使得一个struct具有interface的接口，而不需要实现interface中的有声明的函数
 // codec binds an encoder and decoder.
@@ -284,6 +286,7 @@ func (s base64Serializer) Decode(data []byte, defaults *schema.GroupVersionKind,
 	return s.Decoder.Decode(out[:n], defaults, into)
 }
 
+// 判断 types 中是否与 mediaType 匹配
 // SerializerInfoForMediaType returns the first info in types that has a matching media type (which cannot
 // include media-type parameters), or the first info with an empty media type, or false if no type matches.
 func SerializerInfoForMediaType(types []SerializerInfo, mediaType string) (SerializerInfo, bool) {

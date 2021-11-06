@@ -25,6 +25,7 @@ import (
 
 
 // RecognizingDecoder是具有辨识能力的解码器，即判断数据是否能够由自己解析
+// 对比 runtime.Decoder，多了 RecognizesData，用于判断序列化格式自己能够解析
 type RecognizingDecoder interface {
 	// 继承了解码器，很好理解，因为本身就是解码器。
 	runtime.Decoder
@@ -74,8 +75,10 @@ type decoder struct {
 	decoders []runtime.Decoder
 }
 
+//判断 decoder 是否实现了 RecognizingDecoder 的所有接口
 var _ RecognizingDecoder = &decoder{}
 
+// ok
 // RecognizesData()实现了RecognizingDecoder.RecognizesData()接口。
 // 因为decoder结构体中包含了[]runtime.Decoder成员变量(decoders)，为了区分decoder和decoder.decoders[i]，
 // 后续的注释中'decoder'代表的就是decoder结构体，而'解码器'代表的是decoder.decoders[i]。
@@ -112,6 +115,7 @@ func (d *decoder) RecognizesData(data []byte) (bool, bool, error) {
 	return false, anyUnknown, lastErr
 }
 
+// ok
 // Decode()实现了runtime.Decoder.Decode()接口
 // 不挑选数据格式（json、protobuf、yaml）
 func (d *decoder) Decode(data []byte, gvk *schema.GroupVersionKind, into runtime.Object) (runtime.Object, *schema.GroupVersionKind, error) {

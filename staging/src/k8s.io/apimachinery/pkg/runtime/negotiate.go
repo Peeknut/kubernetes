@@ -36,8 +36,11 @@ func (e NegotiateError) Error() string {
 	return fmt.Sprintf("no serializers registered for %s", e.ContentType)
 }
 
+// 进一步封装，判断某个 mediatype 是否可以解析
 type clientNegotiator struct {
+	// codec 编解码器，生成某个gv的编解码
 	serializer     NegotiatedSerializer
+	// 编解码的版本
 	encode, decode GroupVersioner
 }
 
@@ -82,6 +85,9 @@ func (n *clientNegotiator) StreamDecoder(contentType string, params map[string]s
 	return n.serializer.DecoderToVersion(info.Serializer, n.decode), info.StreamSerializer.Serializer, info.StreamSerializer.Framer, nil
 }
 
+// 根据 content type 搜索合适的 encoder、decoder、stream decoder。不会执行任何的转换，但是会将 obj encode 为期望的 gvk。
+// 该方法在创建 client 的时候使用
+// 传入的参数 NegotiatedSerializer 表示 code-factory
 // NewClientNegotiator will attempt to retrieve the appropriate encoder, decoder, or
 // stream decoder for a given content type. Does not perform any conversion, but will
 // encode the object to the desired group, version, and kind. Use when creating a client.
@@ -89,6 +95,7 @@ func NewClientNegotiator(serializer NegotiatedSerializer, gv schema.GroupVersion
 	return &clientNegotiator{
 		serializer: serializer,
 		encode:     gv,
+		// TODO：为什么这里不用初始化 decode 字段？
 	}
 }
 
