@@ -143,6 +143,7 @@ func runKubeConfigFile(kubeConfigFileName string) func(workflow.RunData) error {
 				if err != nil {
 					return err
 				}
+				// data.KubeConfigDir() = /etc/kubernets
 				err = os.WriteFile(filepath.Join(data.KubeConfigDir(), kubeConfigFileName), contents, fileInfo.Mode())
 				if err != nil {
 					return err

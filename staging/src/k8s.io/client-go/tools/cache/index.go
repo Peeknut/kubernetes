@@ -82,6 +82,8 @@ const (
 	NamespaceIndex string = "namespace"
 )
 
+// 一个典型的索引函数，方便查询时可以根据namespace获取该namespace下的所有对象。
+// 该函数被添加到 informer 中 indexer cache 中
 // MetaNamespaceIndexFunc is a default index function that indexes based on an object's namespace
 func MetaNamespaceIndexFunc(obj interface{}) ([]string, error) {
 	meta, err := meta.Accessor(obj)

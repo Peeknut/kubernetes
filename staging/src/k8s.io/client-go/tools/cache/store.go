@@ -141,6 +141,7 @@ type cache struct {
 	cacheStorage ThreadSafeStore
 	// keyFunc is used to make the key for objects stored in and retrieved from items, and
 	// should be deterministic.
+	// 获取 obj 的 key
 	keyFunc KeyFunc
 }
 
@@ -262,6 +263,7 @@ func NewStore(keyFunc KeyFunc) Store {
 	}
 }
 
+// ok
 // NewIndexer returns an Indexer implemented simply with a map and a lock.
 func NewIndexer(keyFunc KeyFunc, indexers Indexers) Indexer {
 	return &cache{

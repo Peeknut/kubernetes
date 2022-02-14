@@ -87,7 +87,9 @@ type ProcessFunc func(obj interface{}) error
 
 // `*controller` implements Controller
 type controller struct {
+	// config 包含了初始化 reflector 的所有信息，主要是为了初始化 reflector
 	config         Config
+	// DeltaFIFO 队列的消息生产者：执行 ListAndWatch，并将消息放入 DeltaFIFO 事件队列中
 	reflector      *Reflector
 	reflectorMutex sync.RWMutex
 	clock          clock.Clock
@@ -112,6 +114,8 @@ type Controller interface {
 	LastSyncResourceVersion() string
 }
 
+// ok
+// 只初始化controller的config成员，controller的reflector成员是在Run的时候初始化
 // New makes a new Controller from the given Config.
 func New(c *Config) Controller {
 	ctlr := &controller{
@@ -121,6 +125,10 @@ func New(c *Config) Controller {
 	return ctlr
 }
 
+// ok
+// 主要工作：把对象添加到 DeltaFIFO & 把对象从 DeltaFIFO 中 pop 出来并处理
+// 1、通过执行reflector.Run方法启动reflector，开启对指定对象的listAndWatch过程，获取的对象将添加到reflector的deltaFIFO中
+// 2、通过不断执行processLoop方法，从DeltaFIFO pop出对象，再调用reflector的Process（就是shareIndexInformer的HandleDeltas方法）处理
 // Run begins processing items, and will continue until a value is sent down stopCh or it is closed.
 // It's an error to call Run more than once.
 // Run blocks; call via go.
@@ -130,13 +138,14 @@ func (c *controller) Run(stopCh <-chan struct{}) {
 		<-stopCh
 		c.config.Queue.Close()
 	}()
+	// 使用config创建一个Reflector
 	r := NewReflector(
-		c.config.ListerWatcher,
-		c.config.ObjectType,
-		c.config.Queue,
-		c.config.FullResyncPeriod,
+		c.config.ListerWatcher,  // 某个资源的 list/watch 方法
+		c.config.ObjectType,  // 资源类型，比如 deployment{}
+		c.config.Queue, // DeltaFIFO
+		c.config.FullResyncPeriod,  // 30s
 	)
-	r.ShouldResync = c.config.ShouldResync
+	r.ShouldResync = c.config.ShouldResync  //来自sharedProcessor的方法
 	r.WatchListPageSize = c.config.WatchListPageSize
 	r.clock = c.clock
 	if c.config.WatchErrorHandler != nil {
@@ -149,12 +158,15 @@ func (c *controller) Run(stopCh <-chan struct{}) {
 
 	var wg wait.Group
 
+	// 启动reflector，执行ListWatch方法
 	wg.StartWithChannel(stopCh, r.Run)
 
+	// 不断执行processLoop，这个方法其实就是从DeltaFIFO pop出对象，再调用reflector的Process（其实是shareIndexInformer的HandleDeltas方法）处理
 	wait.Until(c.processLoop, time.Second, stopCh)
 	wg.Wait()
 }
 
+// ok
 // Returns true once this controller has completed an initial resource listing
 func (c *controller) HasSynced() bool {
 	return c.config.Queue.HasSynced()
@@ -169,6 +181,8 @@ func (c *controller) LastSyncResourceVersion() string {
 	return c.reflector.LastSyncResourceVersion()
 }
 
+// ok
+// 从DeltaFIFO pop出对象，再调用reflector的Process（其实是shareIndexInformer的HandleDeltas方法）处理
 // processLoop drains the work queue.
 // TODO: Consider doing the processing in parallel. This will require a little thought
 // to make sure that we don't end up processing the same object multiple times
@@ -180,12 +194,16 @@ func (c *controller) LastSyncResourceVersion() string {
 // also be helpful.
 func (c *controller) processLoop() {
 	for {
+		// c.config.Process 处理 FIFO 中 pop 出来的元素
+		// 注意这里的 obj 是某个资源的所有 watchevent 资源，即deltas
 		obj, err := c.config.Queue.Pop(PopProcessFunc(c.config.Process))
 		if err != nil {
 			if err == ErrFIFOClosed {
 				return
 			}
 			if c.config.RetryOnError {
+				// AddIfNotPresent：如果队列中已经存在了该 obj 的相关 watch event，那么不用再将这个 obj 放入 FIFO 中了。
+				// Q：这部分逻辑已经再 c.config.Queue.Pop 中了，为什么还要再做一遍？？
 				// This is the safe way to re-enqueue.
 				c.config.Queue.AddIfNotPresent(obj)
 			}

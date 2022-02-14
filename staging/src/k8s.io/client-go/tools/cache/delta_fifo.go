@@ -99,25 +99,32 @@ type DeltaFIFO struct {
 	lock sync.RWMutex
 	cond sync.Cond
 
+	// 记录deltaFIFO中的对象，注意map的value是一个delta slice
 	// `items` maps a key to a Deltas.
 	// Each such Deltas has at least one Delta.
 	items map[string]Deltas
 
+	// 记录上面items中的key，维护对象的fifo顺序
 	// `queue` maintains FIFO order of keys for consumption in Pop().
 	// There are no duplicates in `queue`.
 	// A key is in `queue` if and only if it is in `items`.
 	queue []string
 
+	// 队列中是否填充过数据，LIST时调用Replace或调用Delete/Add/Update都会置为true
 	// populated is true if the first batch of items inserted by Replace() has been populated
 	// or Delete/Add/Update/AddIfNotPresent was called first.
 	populated bool
+	// 首次List的时候获取到的数据就会调用Replace批量增加到队列，同时设置initialPopulationCount为List到的对象数量，
+	//每次Pop出来会减一，用于判断是否把首次批量插入的数据都POP出去了
 	// initialPopulationCount is the number of items inserted by the first call of Replace()
 	initialPopulationCount int
 
+	// 知道怎么从对象中解析出对应key的函数，如MetaNamespaceKeyFunc可以解析出namespace/name的形式
 	// keyFunc is used to make the key used for queued item
 	// insertion and retrieval, and should be deterministic.
 	keyFunc KeyFunc
 
+	// 这个其实就是shareIndexInformer中的indexer底层缓存的引用，可以认为和etcd中的数据一致
 	// knownObjects list keys that are "known" --- affecting Delete(),
 	// Replace(), and Resync()
 	knownObjects KeyListerGetter
@@ -206,6 +213,7 @@ type Deltas []Delta
 // instead to receive a `Replaced` event depending on the type.
 //
 // Deprecated: Equivalent to NewDeltaFIFOWithOptions(DeltaFIFOOptions{KeyFunction: keyFunc, KnownObjects: knownObjects})
+// NewDeltaFIFO方法在sharedIndexInformer的Run方法中调用
 func NewDeltaFIFO(keyFunc KeyFunc, knownObjects KeyListerGetter) *DeltaFIFO {
 	return NewDeltaFIFOWithOptions(DeltaFIFOOptions{
 		KeyFunction:  keyFunc,
@@ -266,14 +274,19 @@ func (f *DeltaFIFO) KeyOf(obj interface{}) (string, error) {
 	return f.keyFunc(obj)
 }
 
+// ok
 // HasSynced returns true if an Add/Update/Delete/AddIfNotPresent are called first,
 // or the first batch of items inserted by Replace() has been popped.
+// 串连前面的问题：factory的WaitForCacheSync是如何等待缓存同步完成
+// factory的WaitForCacheSync方法调用informer的HasSync方法，继而调用deltaFIFO的HasSync方法，
+// 也就是判断从reflector list到的数据是否pop完
 func (f *DeltaFIFO) HasSynced() bool {
 	f.lock.Lock()
 	defer f.lock.Unlock()
 	return f.populated && f.initialPopulationCount == 0
 }
 
+// ok
 // Add inserts an item, and puts it in the queue. The item is only enqueued
 // if it doesn't already exist in the set.
 func (f *DeltaFIFO) Add(obj interface{}) error {
@@ -283,6 +296,7 @@ func (f *DeltaFIFO) Add(obj interface{}) error {
 	return f.queueActionLocked(Added, obj)
 }
 
+// ok
 // Update is just like Add, but makes an Updated Delta.
 func (f *DeltaFIFO) Update(obj interface{}) error {
 	f.lock.Lock()
@@ -291,6 +305,7 @@ func (f *DeltaFIFO) Update(obj interface{}) error {
 	return f.queueActionLocked(Updated, obj)
 }
 
+// ok
 // Delete is just like Add, but makes a Deleted Delta. If the given
 // object does not already exist, it will be ignored. (It may have
 // already been deleted by a Replace (re-list), for example.)  In this
@@ -317,6 +332,7 @@ func (f *DeltaFIFO) Delete(obj interface{}) error {
 		// because it will be deduped automatically in "queueActionLocked"
 		_, exists, err := f.knownObjects.GetByKey(id)
 		_, itemsExist := f.items[id]
+		// 如果informer的底层缓存 indexer cache 没有该资源对象，并且 fifo 中 items 没有这个对象，则直接返回 nil
 		if err == nil && !exists && !itemsExist {
 			// Presumably, this was deleted when a relist happened.
 			// Don't provide a second report of the same deletion.
@@ -324,10 +340,12 @@ func (f *DeltaFIFO) Delete(obj interface{}) error {
 		}
 	}
 
+	// 如果 fifo 中 items 存在该对象 或者informer的底层缓存 indexer cache 存在该资源对象
 	// exist in items and/or KnownObjects
 	return f.queueActionLocked(Deleted, obj)
 }
 
+// ok
 // AddIfNotPresent inserts an item, and puts it in the queue. If the item is already
 // present in the set, it is neither enqueued nor added to the set.
 //
@@ -365,13 +383,16 @@ func (f *DeltaFIFO) addIfNotPresent(id string, deltas Deltas) {
 	f.cond.Broadcast()
 }
 
+// ok
 // re-listing and watching can deliver the same update multiple times in any
 // order. This will combine the most recent two deltas if they are the same.
+// 当前认为只有连续的两个Delete delta才有必要去重
 func dedupDeltas(deltas Deltas) Deltas {
 	n := len(deltas)
 	if n < 2 {
 		return deltas
 	}
+	// 每次取最后两个delta来判断，优先去掉倒数第二个
 	a := &deltas[n-1]
 	b := &deltas[n-2]
 	if out := isDup(a, b); out != nil {
@@ -385,6 +406,7 @@ func dedupDeltas(deltas Deltas) Deltas {
 // Otherwise, returns nil.
 // TODO: is there anything other than deletions that need deduping?
 func isDup(a, b *Delta) *Delta {
+	// 当前认为只有连续的两个Delete delta才有必要去重
 	if out := isDeletionDup(a, b); out != nil {
 		return out
 	}
@@ -398,24 +420,33 @@ func isDeletionDup(a, b *Delta) *Delta {
 		return nil
 	}
 	// Do more sophisticated checks, or is this sufficient?
+	// 优先去重DeletedFinalStateUnknown类型的Deleted delta
 	if _, ok := b.Object.(DeletedFinalStateUnknown); ok {
 		return a
 	}
 	return b
 }
 
+// ok
 // queueActionLocked appends to the delta list for the object.
 // Caller must lock first.
+// 在队列中给指定的对象append一个Delta
+// 注意这里在append增量时的去重逻辑：如果连续的两个增量类型都是Deleted，
+//那么就去掉一个（正常情况确实不会出现这样，且没必要），优先去掉前面所说的因为re-list可能
+//导致的api与local store不一致而增加的DeletedFinalStateUnknown类型的增量
 func (f *DeltaFIFO) queueActionLocked(actionType DeltaType, obj interface{}) error {
 	id, err := f.KeyOf(obj)
 	if err != nil {
 		return KeyError{obj, err}
 	}
 	oldDeltas := f.items[id]
+	// 把增量append到slice的后面
 	newDeltas := append(oldDeltas, Delta{actionType, obj})
+	// 连续的两个Deleted delta将会去掉一个
 	newDeltas = dedupDeltas(newDeltas)
 
 	if len(newDeltas) > 0 {
+		// 维护queue队列
 		if _, exists := f.items[id]; !exists {
 			f.queue = append(f.queue, id)
 		}
@@ -498,6 +529,7 @@ func (f *DeltaFIFO) IsClosed() bool {
 	return f.closed
 }
 
+// ok
 // Pop blocks until the queue has some items, and then returns one.  If
 // multiple items are ready, they are returned in the order in which they were
 // added/updated. The item is removed from the queue (and the store) before it
@@ -512,6 +544,9 @@ func (f *DeltaFIFO) IsClosed() bool {
 //
 // Pop returns a 'Deltas', which has a complete list of all the things
 // that happened to the object (deltas) while it was sitting in the queue.
+// 从队列中Pop出一个方法，并由函数process来处理，其实就是shareIndexInformer的HandleDeltas。
+// 每次从DeltaFIFO Pop出一个对象，f.initialPopulationCount会减一，初始值为List时的对象数量
+// 前面的Informer的WaitForCacheSync最终就是调用了这个HasSynced方法
 func (f *DeltaFIFO) Pop(process PopProcessFunc) (interface{}, error) {
 	f.lock.Lock()
 	defer f.lock.Unlock()
@@ -526,8 +561,11 @@ func (f *DeltaFIFO) Pop(process PopProcessFunc) (interface{}, error) {
 
 			f.cond.Wait()
 		}
+		//取出队首元素
 		id := f.queue[0]
+		//去掉队首元素
 		f.queue = f.queue[1:]
+		//首次填充的对象数减一
 		depth := len(f.queue)
 		if f.initialPopulationCount > 0 {
 			f.initialPopulationCount--
@@ -551,8 +589,11 @@ func (f *DeltaFIFO) Pop(process PopProcessFunc) (interface{}, error) {
 				utiltrace.Field{Key: "Reason", Value: "slow event handlers blocking the queue"})
 			defer trace.LogIfLong(100 * time.Millisecond)
 		}
+		//处理增量对象
 		err := process(item)
+		// 如果没有处理成功，那么就会重新加到deltaFIFO队列中
 		if e, ok := err.(ErrRequeue); ok {
+			// 如果 items 中又有该 obj 的事件了，那么前面的事件已经不重要了。
 			f.addIfNotPresent(id, item)
 			err = e.Err
 		}
@@ -562,6 +603,7 @@ func (f *DeltaFIFO) Pop(process PopProcessFunc) (interface{}, error) {
 	}
 }
 
+// ok
 // Replace atomically does two things: (1) it adds the given objects
 // using the Sync or Replace DeltaType and then (2) it does some deletions.
 // In particular: for every pre-existing key K that is not the key of
@@ -572,6 +614,8 @@ func (f *DeltaFIFO) Pop(process PopProcessFunc) (interface{}, error) {
 // of the Deltas associated with K.  Otherwise the pre-existing keys
 // are those listed by `f.knownObjects` and the current object of K is
 // what `f.knownObjects.GetByKey(K)` returns.
+// 批量向队列插入数据的方法，注意knownObjects是informer中本地缓存indexer的引用
+//这里会更新deltaFIFO的initialPopulationCount为Replace list的对象总数加上list中相比knownObjects多出的对象数量。
 func (f *DeltaFIFO) Replace(list []interface{}, _ string) error {
 	f.lock.Lock()
 	defer f.lock.Unlock()
@@ -583,6 +627,7 @@ func (f *DeltaFIFO) Replace(list []interface{}, _ string) error {
 		action = Replaced
 	}
 
+	// 将 list 中的对象插入 item 中，并根据情况更新 queue
 	// Add Sync/Replaced action for each new item.
 	for _, item := range list {
 		key, err := f.KeyOf(item)
@@ -590,11 +635,14 @@ func (f *DeltaFIFO) Replace(list []interface{}, _ string) error {
 			return KeyError{item, err}
 		}
 		keys.Insert(key)
+		// 调用deltaFIFO的queueActionLocked向deltaFIFO增加一个增量
+		// 可以看到Replace添加的Delta type都是Sync
 		if err := f.queueActionLocked(action, item); err != nil {
 			return fmt.Errorf("couldn't enqueue object: %v", err)
 		}
 	}
 
+	// 底层的缓存不应该会是nil，可以忽略这种情况
 	if f.knownObjects == nil {
 		// Do deletion detection against our own list.
 		queuedDeletions := 0
@@ -602,6 +650,7 @@ func (f *DeltaFIFO) Replace(list []interface{}, _ string) error {
 			if keys.Has(k) {
 				continue
 			}
+			// 当knownObjects为空时，如果item中存在对象不在新来的list中，那么该对象被认为要被删除
 			// Delete pre-existing items not in the new list.
 			// This could happen if watch deletion event was missed while
 			// disconnected from apiserver.
@@ -625,14 +674,29 @@ func (f *DeltaFIFO) Replace(list []interface{}, _ string) error {
 		return nil
 	}
 
+	//因为Replace方法可能是reflector发生re-list的时候再次调用，
+	//这个时候就会出现knownObjects中存在的对象不在Replace list的情况（比如watch的delete事件丢失了），
+	//这个时候是把这些对象筛选出来，封装成DeletedFinalStateUnknown对象以Delete type类型再次加入到deltaFIFO中，
+	//这样最终从detaFIFO处理这个DeletedFinalStateUnknown 增量时就可以更新本地缓存并且触发reconcile。
+	//因为这个对象最终的结构确实找不到了，所以只能用knownObjects里面的记录来封装delta，所以叫做FinalStateUnknown。
+
+	// 当reflector发生re-list时，可能会出现knownObjects中存在的对象不在Replace list的情况
 	// Detect deletions not already in the queue.
 	knownKeys := f.knownObjects.ListKeys()
+	// 记录这次替换相当于在缓存中删除多少对象
 	queuedDeletions := 0
+	// 枚举local store中的所有对象
 	for _, k := range knownKeys {
+		// 对象也在Replace list中，所以跳过
+		// 只要后续更新就好了
 		if keys.Has(k) {
 			continue
 		}
 
+		// 对象在缓存，但不在list中，说明替换操作完成后，这个对象相当于被删除了
+		// 注意这里的所谓替换，对deltaFIFO来说，是给队列中的对应对象增加一个
+		// delete增量queueActionLocked(Deleted, DeletedFinalStateUnknown{k, deletedObj})
+		// 真正删除缓存需要等到DeletedFinalStateUnknown增量被POP出来操作local store时
 		deletedObj, exists, err := f.knownObjects.GetByKey(k)
 		if err != nil {
 			deletedObj = nil
@@ -647,6 +711,8 @@ func (f *DeltaFIFO) Replace(list []interface{}, _ string) error {
 		}
 	}
 
+	// 设置f.initialPopulationCount，该值大于0表示首次插入的对象还没有全部pop出去
+	// informer WaitForCacheSync就是在等待该值为0
 	if !f.populated {
 		f.populated = true
 		f.initialPopulationCount = keys.Len() + queuedDeletions
@@ -655,9 +721,12 @@ func (f *DeltaFIFO) Replace(list []interface{}, _ string) error {
 	return nil
 }
 
+// ok
 // Resync adds, with a Sync type of Delta, every object listed by
 // `f.knownObjects` whose key is not already queued for processing.
 // If `f.knownObjects` is `nil` then Resync does nothing.
+// 同步local store到deltaFIFO
+// 所谓的resync，其实就是把knownObjects即缓存中的对象全部再通过queueActionLocked(Sync, obj)加到队列
 func (f *DeltaFIFO) Resync() error {
 	f.lock.Lock()
 	defer f.lock.Unlock()
@@ -667,7 +736,9 @@ func (f *DeltaFIFO) Resync() error {
 	}
 
 	keys := f.knownObjects.ListKeys()
+	// 把local store中的对象都以Sync类型增量的形式重新放回到deltaFIFO
 	for _, k := range keys {
+		//需要注意的是，在添加对象到deltaFIFO时会检查该队列中有没有增量没有处理完的，如果有则忽略这个对象的此次resync
 		if err := f.syncKeyLocked(k); err != nil {
 			return err
 		}
@@ -693,10 +764,16 @@ func (f *DeltaFIFO) syncKeyLocked(key string) error {
 	if err != nil {
 		return KeyError{obj, err}
 	}
+	// 如上述注释，在resync时，如果deltaFIFO中该对象还存在其他delta没处理，那么忽略这次的resync
+	// 因为调用queueActionLocked是增加delta是通过append的，且处理对象的增量delta时，是从oldest到newdest的
+	// 所以如果某个对象还存在增量没处理，再append就可能导致后处理的delta是旧的对象
+
+	// 如果deltaFIFO中该对象还有增量没有处理，则忽略以避免冲突，原因如上面注释：在同一个对象的增量列表中，排在后面的增量的object相比前面的增量应该更新才是合理的
 	if len(f.items[id]) > 0 {
 		return nil
 	}
 
+	// 跟deltaFIFO的Replace方法一样，都是添加一个Sync类型的增量
 	if err := f.queueActionLocked(Sync, obj); err != nil {
 		return fmt.Errorf("couldn't queue object: %v", err)
 	}

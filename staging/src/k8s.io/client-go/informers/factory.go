@@ -49,20 +49,34 @@ import (
 	cache "k8s.io/client-go/tools/cache"
 )
 
+// ok
+// 配置 sharedInformerFactory
 // SharedInformerOption defines the functional option type for SharedInformerFactory.
 type SharedInformerOption func(*sharedInformerFactory) *sharedInformerFactory
 
+// ok
 type sharedInformerFactory struct {
+	// ok
+	// list/watch 请求时，需要与 APIserver 进行连接，连接的认证信息在 client 中
 	client           kubernetes.Interface
+	// factory 关注的namepace，可以通过WithNamespace Option配置。默认是 all namespaces。
+	// informer中的reflector将只会listAndWatch指定namespace的资源
 	namespace        string
 	tweakListOptions internalinterfaces.TweakListOptionsFunc
 	lock             sync.Mutex
-	defaultResync    time.Duration
-	customResync     map[reflect.Type]time.Duration
 
+	// 用于初始化持有的shareIndexInformer的resyncCheckPeriod和defaultEventHandlerResyncPeriod字段，用于定时的将local store同步到deltaFIFO
+	defaultResync    time.Duration
+	// 支持针对每一个informer来配置resync时间，通过WithCustomResyncConfig这个Option配置，否则就用指定的defaultResync
+	customResync     map[reflect.Type]time.Duration  //自定义resync时间
+
+	// ok
+	//针对每种类型资源存储一个informer，informer的类型是ShareIndexInformer
 	informers map[reflect.Type]cache.SharedIndexInformer
+
 	// startedInformers is used for tracking which informers have been started.
 	// This allows Start() to be called multiple times safely.
+	//记录已经启动的informer集合
 	startedInformers map[reflect.Type]bool
 }
 
@@ -92,6 +106,8 @@ func WithNamespace(namespace string) SharedInformerOption {
 	}
 }
 
+// ok
+// 这个函数对外使用比较多
 // NewSharedInformerFactory constructs a new instance of sharedInformerFactory for all namespaces.
 func NewSharedInformerFactory(client kubernetes.Interface, defaultResync time.Duration) SharedInformerFactory {
 	return NewSharedInformerFactoryWithOptions(client, defaultResync)
@@ -105,12 +121,16 @@ func NewFilteredSharedInformerFactory(client kubernetes.Interface, defaultResync
 	return NewSharedInformerFactoryWithOptions(client, defaultResync, WithNamespace(namespace), WithTweakListOptions(tweakListOptions))
 }
 
+// ok
+// 根据 options 配置 sharedInformerFactory
 // NewSharedInformerFactoryWithOptions constructs a new instance of a SharedInformerFactory with additional options.
 func NewSharedInformerFactoryWithOptions(client kubernetes.Interface, defaultResync time.Duration, options ...SharedInformerOption) SharedInformerFactory {
+	// 初始化的时候，informers 字段是空的，需要后续用户自己加进去。——跟我原来设想的不一样，我以为 factory 中应该存放了所有资源的 informer
+	// 用户只需要调用就可以了。
 	factory := &sharedInformerFactory{
 		client:           client,
-		namespace:        v1.NamespaceAll,
-		defaultResync:    defaultResync,
+		namespace:        v1.NamespaceAll,  // 默认监听所有ns下的指定资源
+		defaultResync:    defaultResync,  //30s
 		informers:        make(map[reflect.Type]cache.SharedIndexInformer),
 		startedInformers: make(map[reflect.Type]bool),
 		customResync:     make(map[reflect.Type]time.Duration),
@@ -124,6 +144,8 @@ func NewSharedInformerFactoryWithOptions(client kubernetes.Interface, defaultRes
 	return factory
 }
 
+// ok
+// 启动 factory 下所有的 informer
 // Start initializes all requested informers.
 func (f *sharedInformerFactory) Start(stopCh <-chan struct{}) {
 	f.lock.Lock()
@@ -131,14 +153,26 @@ func (f *sharedInformerFactory) Start(stopCh <-chan struct{}) {
 
 	for informerType, informer := range f.informers {
 		if !f.startedInformers[informerType] {
+			//直接起gorouting调用informer的Run方法，并且标记对应的informer已经启动
+			// 运行一个 informer，即进行 list/watch
 			go informer.Run(stopCh)
 			f.startedInformers[informerType] = true
 		}
 	}
 }
 
+
+// ok
+// 等待 informer 的 cache 被同步
+
+// sharedInformerFactory的WaitForCacheSync将会不断调用factory持有的所有informer的HasSynced方法，直到返回true
+//
+//而informer的HasSynced方法调用的自己持有的controller的HasSynced方法（informer结构持有controller对象，下文会分析informer的结构）
+//
+//informer中的controller的HasSynced方法则调用的是controller持有的deltaFIFO对象的HasSynced方法
 // WaitForCacheSync waits for all started informers' cache were synced.
 func (f *sharedInformerFactory) WaitForCacheSync(stopCh <-chan struct{}) map[reflect.Type]bool {
+	// 这里会直接执行这个函数
 	informers := func() map[reflect.Type]cache.SharedIndexInformer {
 		f.lock.Lock()
 		defer f.lock.Unlock()
@@ -153,12 +187,19 @@ func (f *sharedInformerFactory) WaitForCacheSync(stopCh <-chan struct{}) map[ref
 	}()
 
 	res := map[reflect.Type]bool{}
+	// 等待他们的cache被同步，调用的是informer的HasSynced方法
 	for informType, informer := range informers {
+		// 这里每次调用 cache.WaitForCacheSync 都会阻塞，直到该 informer.HasSynced 返回 true，才会开始遍历下一个 informer
 		res[informType] = cache.WaitForCacheSync(stopCh, informer.HasSynced)
 	}
 	return res
 }
 
+// ok
+// 向 factory 添加某个资源的 informer。原来的 factory 中是没有 informer 的，需要用户自己添加。
+// 参数：
+// 		obj: informer关注的资源如deployment{}
+//		newFunc: 一个知道如何创建指定informer的方法，k8s为每一个内置的对象都实现了这个方法（相关代码在 client-go 中），比如创建deployment的ShareIndexInformer的方法
 // InternalInformerFor returns the SharedIndexInformer for obj using an internal
 // client.
 func (f *sharedInformerFactory) InformerFor(obj runtime.Object, newFunc internalinterfaces.NewInformerFunc) cache.SharedIndexInformer {

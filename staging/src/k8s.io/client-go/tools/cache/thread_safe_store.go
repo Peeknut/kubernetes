@@ -59,13 +59,20 @@ type ThreadSafeStore interface {
 	Resync() error
 }
 
+// threadSafeStore是线程安全的，并且具备自定义索引查找的能力
 // threadSafeMap implements ThreadSafeStore
 type threadSafeMap struct {
 	lock  sync.RWMutex
+	//存储具体的对象，比如key为ns/podName，value为pod{}
 	items map[string]interface{}
 
+	// 下面两个索引的作用是什么？是为了在 list/get 等操作的时候，快速查找吗？
+	// 一个map[string]IndexFunc结构，其中key为索引的名称，如’namespace’字符串、'nodeName'字符串，value则是一个具体的索引函数
+	// indexers 和 indices 中的 key 是相匹配的
 	// indexers maps a name to an IndexFunc
 	indexers Indexers
+	// 一个map[string]Index结构，其中key也是索引的名称（比如 namespace、nodename），value是一个map[string]sets.String结构，
+	//其中key是具体的namespace，如default这个ns，vlaue则是这个ns下的按照索引函数求出来的值的集合，比如default这个ns下的所有pod对象名称
 	// indices maps a name to an Index
 	indices Indices
 }
@@ -74,11 +81,14 @@ func (c *threadSafeMap) Add(key string, obj interface{}) {
 	c.Update(key, obj)
 }
 
+// 这里的参数 key 是什么值？用来表示 obj 的唯一性？
 func (c *threadSafeMap) Update(key string, obj interface{}) {
 	c.lock.Lock()
 	defer c.lock.Unlock()
 	oldObject := c.items[key]
+	// 存储对象
 	c.items[key] = obj
+	// 更新对象的索引
 	c.updateIndices(oldObject, obj, key)
 }
 
@@ -132,6 +142,11 @@ func (c *threadSafeMap) Replace(items map[string]interface{}, resourceVersion st
 	}
 }
 
+// ok
+// Index方法可以根据索引名称和对象，查询所有的关联对象
+// 例如通过 Index(“namespace”, &metav1.ObjectMeta{Namespace: namespace})获取指定ns下的所有对象，具体可以参考tools/cache/listers.go#ListAllByNamespace
+// 参数：
+//		indexName：比如 "nodeName"、"namespace
 // Index returns a list of items that match the given object on the index function.
 // Index is thread-safe so long as you treat all items as immutable.
 func (c *threadSafeMap) Index(indexName string, obj interface{}) ([]interface{}, error) {
@@ -150,10 +165,12 @@ func (c *threadSafeMap) Index(indexName string, obj interface{}) ([]interface{},
 	index := c.indices[indexName]
 
 	var storeKeySet sets.String
+	//例如namespace索引
 	if len(indexedValues) == 1 {
 		// In majority of cases, there is exactly one value matching.
 		// Optimize the most common path - deduping is not needed here.
 		storeKeySet = index[indexedValues[0]]
+	//例如label索引
 	} else {
 		// Need to de-dupe the return list.
 		// Since multiple keys are allowed, this can happen.
@@ -172,6 +189,7 @@ func (c *threadSafeMap) Index(indexName string, obj interface{}) ([]interface{},
 	return list, nil
 }
 
+// ok
 // ByIndex returns a list of the items whose indexed values in the given index include the given indexed value
 func (c *threadSafeMap) ByIndex(indexName, indexedValue string) ([]interface{}, error) {
 	c.lock.RLock()
@@ -247,6 +265,7 @@ func (c *threadSafeMap) AddIndexers(newIndexers Indexers) error {
 	return nil
 }
 
+// 参数 key 为 obj 的唯一标志
 // updateIndices modifies the objects location in the managed indexes:
 // - for create you must provide only the newObj
 // - for update you must provide both the oldObj and the newObj
@@ -255,8 +274,11 @@ func (c *threadSafeMap) AddIndexers(newIndexers Indexers) error {
 func (c *threadSafeMap) updateIndices(oldObj interface{}, newObj interface{}, key string) {
 	var oldIndexValues, indexValues []string
 	var err error
+	//遍历所有的Indexers中的索引函数
+	// 举例 name 为 "namespace"
 	for name, indexFunc := range c.indexers {
 		if oldObj != nil {
+			//根据索引函数计算obj对应的
 			oldIndexValues, err = indexFunc(oldObj)
 		} else {
 			oldIndexValues = oldIndexValues[:0]
@@ -280,13 +302,19 @@ func (c *threadSafeMap) updateIndices(oldObj interface{}, newObj interface{}, ke
 			c.indices[name] = index
 		}
 
+		//索引函数计算出多个value，也可能是一个，比如pod的ns就只有一个值，pod的label可能就有多个值
+		// 删除原来旧的索引值
 		for _, value := range oldIndexValues {
 			// We optimize for the most common case where index returns a single value.
 			if len(indexValues) == 1 && value == indexValues[0] {
 				continue
 			}
+			// key 为 obj 的唯一标志
+			// value 为二级索引值，比如 ns "ljw"
+			// index 表示一级所有值对应的值，比如 ns 对应的分类
 			c.deleteKeyFromIndex(key, value, index)
 		}
+		// 添加新的索引值
 		for _, value := range indexValues {
 			// We optimize for the most common case where index returns a single value.
 			if len(oldIndexValues) == 1 && value == oldIndexValues[0] {
@@ -306,6 +334,7 @@ func (c *threadSafeMap) addKeyToIndex(key, indexValue string, index Index) {
 	set.Insert(key)
 }
 
+// ok
 func (c *threadSafeMap) deleteKeyFromIndex(key, indexValue string, index Index) {
 	set := index[indexValue]
 	if set == nil {

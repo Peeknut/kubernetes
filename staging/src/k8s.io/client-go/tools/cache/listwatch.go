@@ -66,6 +66,12 @@ type Getter interface {
 	Get() *restclient.Request
 }
 
+// ok
+// 参数：
+// Getter 定义：资源获取的方法
+// resource： 资源的名称
+// fieldSelector：定义 list/watch 的资源筛选条件
+// namespace：资源所在的命名空间
 // NewListWatchFromClient creates a new ListWatch from the specified client, resource, namespace and field selector.
 func NewListWatchFromClient(c Getter, resource string, namespace string, fieldSelector fields.Selector) *ListWatch {
 	optionsModifier := func(options *metav1.ListOptions) {
@@ -74,6 +80,7 @@ func NewListWatchFromClient(c Getter, resource string, namespace string, fieldSe
 	return NewFilteredListWatchFromClient(c, resource, namespace, optionsModifier)
 }
 
+// ok
 // NewFilteredListWatchFromClient creates a new ListWatch from the specified client, resource, namespace, and option modifier.
 // Option modifier is a function takes a ListOptions and modifies the consumed ListOptions. Provide customized modifier function
 // to apply modification to ListOptions with a field selector, a label selector, or any other desired options.

@@ -29,11 +29,13 @@ import (
 type Interface interface {
 	// Stops watching. Will close the channel returned by ResultChan(). Releases
 	// any resources used by the watch.
+	// 停止watching，会关闭ResultChan
 	Stop()
 
 	// Returns a chan which will receive all the events. If an error occurs
 	// or Stop() is called, the implementation will close this channel and
 	// release any resources used by the watch.
+	// 返回接收到的所有变更事件。这儿可以理解下controller-manager和scheduler 为何是逐个处理，因为变更是逐个变更，逐个推送的。
 	ResultChan() <-chan Event
 }
 
