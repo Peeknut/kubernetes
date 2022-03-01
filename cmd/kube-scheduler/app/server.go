@@ -195,10 +195,12 @@ func Run(ctx context.Context, cc *schedulerserverconfig.CompletedConfig, sched *
 	// If leader election is enabled, runCommand via LeaderElector until done and exit.
 	if cc.LeaderElection != nil {
 		cc.LeaderElection.Callbacks = leaderelection.LeaderCallbacks{
+			// 回调函数，如果选举成功则执行run函数，run函数就是上面定义的
 			OnStartedLeading: func(ctx context.Context) {
 				close(waitingForLeader)
 				sched.Run(ctx)
 			},
+			// 若因某种原因导致失去leader，执行该函数
 			OnStoppedLeading: func() {
 				select {
 				case <-ctx.Done():
@@ -212,11 +214,13 @@ func Run(ctx context.Context, cc *schedulerserverconfig.CompletedConfig, sched *
 				}
 			},
 		}
+		// 根据scheduler的leader配置去返回leader对象，主要是判定配置的leader config是否正确
 		leaderElector, err := leaderelection.NewLeaderElector(*cc.LeaderElection)
 		if err != nil {
 			return fmt.Errorf("couldn't create leader elector: %v", err)
 		}
 
+		// 开始选举，若获得锁成为leader则执行OnStartedLeading，若获取锁失败则不断重试，直到成为leader
 		leaderElector.Run(ctx)
 
 		return fmt.Errorf("lost lease")

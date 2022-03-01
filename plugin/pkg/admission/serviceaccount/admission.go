@@ -157,6 +157,7 @@ func (s *Plugin) Admit(ctx context.Context, a admission.Attributes, o admission.
 
 	serviceAccount, err := s.getServiceAccount(a.GetNamespace(), pod.Spec.ServiceAccountName)
 	if err != nil {
+		// error looking up service account kube-system/default: serviceaccount "default" not found), error(Process exited with status 1)
 		return admission.NewForbidden(a, fmt.Errorf("error looking up service account %s/%s: %v", a.GetNamespace(), pod.Spec.ServiceAccountName, err))
 	}
 	if s.MountServiceAccountToken && shouldAutomount(serviceAccount, pod) {
